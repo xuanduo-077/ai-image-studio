@@ -1316,6 +1316,14 @@ select { cursor: pointer; }
   white-space: nowrap;
 }
 
+.shot-still {
+  width: 100%;
+  display: block;
+  max-height: 300px;
+  object-fit: cover;
+  background: #0d0f14;
+}
+
 /* ===== 提示词模板下拉 ===== */
 .tpl-row { margin-bottom: var(--space-2); }
 

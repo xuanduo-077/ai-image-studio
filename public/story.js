@@ -581,6 +581,10 @@ function shotHasView(o) {
   return !!(o && (o.imageFile || o.imageUrl));
 }
 
+function shotHasStill(o) {
+  return !!(o && (o.stillFile || o.stillUrl));
+}
+
 function assetViewSrc(o) {
   return o.imageFile || `/api/image?url=${encodeURIComponent(o.imageUrl)}`;
 }
@@ -651,6 +655,14 @@ function buildShotCard(shot, i) {
     pend.appendChild(sp);
     pend.appendChild(txt);
     media.appendChild(pend);
+  } else if (shotHasStill(shot)) {
+    const img = document.createElement('img');
+    img.className = 'shot-still';
+    img.loading = 'lazy';
+    img.alt = `镜头 ${i + 1} 静帧`;
+    img.src = assetViewSrc(shot);
+    img.title = '镜头静帧（视频首帧构图）';
+    media.appendChild(img);
   } else {
     const ph = document.createElement('div');
     ph.className = 'shot-placeholder';
@@ -693,10 +705,16 @@ function buildShotCard(shot, i) {
   tags.textContent = `${scene ? scene.name : shot.scene || '未指定场景'}${castText ? ` · ${castText}` : ''} · ${shot.duration}s`;
   const modeTag = document.createElement('span');
   modeTag.className = 'shot-mode';
-  modeTag.textContent = shot.chained ? '尾帧衔接' : '参考图';
-  modeTag.title = shot.chained
-    ? '场景未变化，使用上一镜头视频尾帧作为首帧'
-    : '使用角色三视图 + 场景图作为参考图生成';
+  if (shotHasStill(shot)) {
+    modeTag.textContent = '静帧衔接';
+    modeTag.title = '使用本镜头静帧作为首帧、下一镜头静帧作为尾帧，构图完全可控';
+  } else if (shot.chained) {
+    modeTag.textContent = '尾帧衔接';
+    modeTag.title = '场景未变化，使用上一镜头视频尾帧作为首帧';
+  } else {
+    modeTag.textContent = '参考图';
+    modeTag.title = '使用角色三视图 + 场景图作为参考图生成';
+  }
   const status = document.createElement('span');
   status.className = 'shot-status ' + shotStatusClass(shot);
   status.textContent = shotStatusLabel(shot);
@@ -720,6 +738,14 @@ function buildShotCard(shot, i) {
 
   const actions = document.createElement('div');
   actions.className = 'shot-actions';
+
+  const stillBtn = document.createElement('button');
+  stillBtn.type = 'button';
+  stillBtn.className = 'mini-btn';
+  stillBtn.textContent = shotHasStill(shot) ? '重新生成静帧' : '生成静帧';
+  if (shot.stillBusy || busy) stillBtn.disabled = true;
+  stillBtn.addEventListener('click', () => generateShotStill(shot, i, stillBtn));
+  actions.appendChild(stillBtn);
 
   const vidBtn = document.createElement('button');
   vidBtn.type = 'button';
@@ -1105,6 +1131,86 @@ async function generateSceneImage(si, btn) {
   }
 }
 
+/** 生成镜头静帧：Agnes 图生图（场景图 + 角色三视图作参考图），作为视频 keyframe 首帧 */
+async function generateShotStill(shot, i, btn) {
+  const apiKey = storyKey('agnes');
+  if (!apiKey) {
+    showToast('请先配置 Agnes Key（静帧使用 Agnes 图生图）');
+    return;
+  }
+  if (shot.stillBusy) return;
+  const story = storyState.current;
+  const scene = storySceneOf(shot);
+  const cast = storyCastOf(shot);
+
+  const refs = [];
+  const refNotes = [];
+  if (scene && shotHasView(scene)) {
+    refs.push(scene.imageFile ? { kind: 'file', value: scene.imageFile } : { kind: 'url', value: scene.imageUrl });
+    refNotes.push(`第 ${refs.length} 张参考图是本镜头的场景环境设定`);
+  }
+  cast
+    .filter(shotHasView)
+    .forEach((c) => {
+      if (refs.length >= 3) return;
+      refs.push(c.imageFile ? { kind: 'file', value: c.imageFile } : { kind: 'url', value: c.imageUrl });
+      refNotes.push(`第 ${refs.length} 张参考图是角色「${c.name}」的三视图外貌设定`);
+    });
+
+  const style = (story && story.style) || '';
+  const prompt = [
+    style || null,
+    '生成一张 16:9 电影镜头静帧（将作为视频首帧），电影级构图与光线',
+    ...refNotes,
+    `画面内容：${shot.videoPrompt || ''}`,
+    '角色外貌、发型与服装必须严格与角色三视图参考一致，场景环境与场景参考图一致',
+    '负面约束：不要文字水印，不要多余角色，不要画面模糊，不要改变角色外貌',
+  ]
+    .filter(Boolean)
+    .join('。');
+
+  const old = btn ? btn.textContent : '';
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '生成中…';
+  }
+  shot.stillBusy = true;
+  renderShots();
+  try {
+    const resp = await fetch('/api/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider: 'agnes',
+        apiKey,
+        prompt,
+        model: state.model.agnes,
+        size: '1K',
+        ratio: '16:9',
+        n: 1,
+        referenceImages: refs,
+      }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.error || `请求失败（HTTP ${resp.status}）`);
+    const rec = (data.records || [])[0];
+    if (!rec) throw new Error('未返回图片记录');
+    shot.stillId = rec.id;
+    shot.stillFile = rec.file || null;
+    shot.stillUrl = rec.url || null;
+    await saveShotNow(i);
+  } catch (err) {
+    showToast(`镜头 ${i + 1} 静帧生成失败：${err.message}`);
+  } finally {
+    shot.stillBusy = false;
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = old;
+    }
+    renderShots();
+  }
+}
+
 async function generateShotVideo(shot, i, btn) {
   const apiKey = storyKey('agnes');
   if (!apiKey) {
@@ -1118,8 +1224,11 @@ async function generateShotVideo(shot, i, btn) {
   const cast = storyCastOf(shot);
   const prevScene = prev ? storySceneOf(prev) : null;
 
-  // 模式判定：场景未变化且上一镜头有尾帧 → 尾帧衔接；否则参考图模式（三视图 + 场景图）
+  // 模式判定：有静帧 → 静帧 keyframe（首帧=本镜静帧，尾帧=下镜静帧，构图完全可控）；
+  // 场景未变化且上一镜头有尾帧 → 尾帧衔接；否则参考图模式（三视图 + 场景图）
+  const hasStill = shotHasStill(shot);
   const chainOk =
+    !hasStill &&
     storyState.chain &&
     !!prev &&
     !!(prev.lastFrameFile || prev.lastFrameUrl) &&
@@ -1129,7 +1238,19 @@ async function generateShotVideo(shot, i, btn) {
   let prompt;
   const frames = {};
   const style = (story && story.style) || '';
-  if (chainOk) {
+  if (hasStill) {
+    mode = 'keyframe';
+    prompt = [style, shot.videoPrompt].filter(Boolean).join('，');
+    frames.firstFrame = shot.stillFile
+      ? { kind: 'file', value: shot.stillFile }
+      : { kind: 'url', value: shot.stillUrl };
+    const next = story && story.shots ? story.shots[i + 1] : null;
+    if (storyState.chain && next && (next.stillFile || next.stillUrl)) {
+      frames.lastFrame = next.stillFile
+        ? { kind: 'file', value: next.stillFile }
+        : { kind: 'url', value: next.stillUrl };
+    }
+  } else if (chainOk) {
     mode = 'keyframe';
     prompt = [style, shot.videoPrompt].filter(Boolean).join('，');
     frames.firstFrame = prev.lastFrameFile
@@ -1385,6 +1506,41 @@ async function batchAssets() {
   showToast(`设定图批量生成完成：成功 ${ok} 张${fail ? `，失败 ${fail} 张（可单独重试）` : ''}`);
 }
 
+async function batchStills() {
+  if (storyState.batchRunning) return;
+  const story = storyState.current;
+  if (!story) {
+    showToast('请先选择或创建故事项目');
+    return;
+  }
+  if (!storyKey('agnes')) {
+    showToast('请先配置 Agnes Key（静帧使用 Agnes 图生图）');
+    return;
+  }
+  const targets = story.shots
+    .map((shot, i) => ({ shot, i }))
+    .filter(({ shot }) => !shotHasStill(shot) && !shot.stillBusy);
+  if (!targets.length) {
+    showToast('所有镜头都已有静帧');
+    return;
+  }
+  if (!confirm(`将按顺序生成 ${targets.length} 张镜头静帧（Agnes 图生图，每张约 20-60 秒），继续？`)) return;
+
+  storyState.batchRunning = true;
+  let ok = 0;
+  let fail = 0;
+  for (const { shot, i } of targets) {
+    if (!storyState.batchRunning) break;
+    $('#story-progress').textContent = `静帧 ${ok + fail + 1}/${targets.length}（镜头 ${i + 1}）…`;
+    await generateShotStill(shot, i, null);
+    if (shotHasStill(shot)) ok += 1;
+    else fail += 1;
+  }
+  storyState.batchRunning = false;
+  $('#story-progress').textContent = '';
+  showToast(`静帧批量生成完成：成功 ${ok} 张${fail ? `，失败 ${fail} 张（可单独重试）` : ''}`);
+}
+
 async function batchVideos() {
   if (storyState.batchRunning) return;
   const story = storyState.current;
@@ -1402,7 +1558,7 @@ async function batchVideos() {
     if (['video_pending', 'video_done', 'submitting'].includes(shot.status) || shot.taskId) return;
     const scene = storySceneOf(shot);
     const prev = i > 0 ? story.shots[i - 1] : null;
-    const hasRefs = (scene && shotHasView(scene)) || storyCastOf(shot).some(shotHasView);
+    const hasRefs = (scene && shotHasView(scene)) || storyCastOf(shot).some(shotHasView) || shotHasStill(shot);
     const chainPossible = storyState.chain && !!prev;
     if (!hasRefs && !chainPossible) {
       skipped += 1;
@@ -1558,6 +1714,7 @@ function initStory() {
   $('#story-delete-btn').addEventListener('click', deleteProject);
   $('#story-analyze-btn').addEventListener('click', analyzeStory);
   $('#story-batch-image-btn').addEventListener('click', batchAssets);
+  $('#story-batch-still-btn').addEventListener('click', batchStills);
   $('#story-batch-video-btn').addEventListener('click', batchVideos);
   $('#story-tab-characters').addEventListener('click', () => switchStoryTab('characters'));
   $('#story-tab-scenes').addEventListener('click', () => switchStoryTab('scenes'));

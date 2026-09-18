@@ -594,7 +594,7 @@ async function callImageApi(provider, apiKey, payload) {
 }
 
 app.post('/api/generate', async (req, res) => {
-  const { provider, apiKey, prompt, size, ratio, n, watermark, model } = req.body || {};
+  const { provider, apiKey, prompt, size, ratio, n, watermark, model, referenceImages } = req.body || {};
   const conf = PROVIDERS[provider];
   if (!conf) {
     return res.status(400).json({ error: '不支持的服务商，请选择 商汤 SenseNova 或 Agnes' });
@@ -633,16 +633,21 @@ app.post('/api/generate', async (req, res) => {
       );
     }
   } else {
+    // Agnes：支持图生图/多图合成（extra_body.image 数组，URL 或 data URL，最多 3 张）
+    const refs = (Array.isArray(referenceImages) ? referenceImages : [])
+      .map(normalizeFrame)
+      .filter(Boolean)
+      .slice(0, 3);
     for (let i = 0; i < count; i++) {
-      tasks.push(
-        callImageApi('agnes', apiKey.trim(), {
-          model: useModel,
-          prompt: promptText,
-          size: String(size || '2K').trim(),
-          ratio: String(ratio || '16:9').trim(),
-          extra_body: { response_format: 'url' },
-        })
-      );
+      const payload = {
+        model: useModel,
+        prompt: promptText,
+        size: String(size || '2K').trim(),
+        ratio: String(ratio || '16:9').trim(),
+        extra_body: { response_format: 'url' },
+      };
+      if (refs.length) payload.extra_body.image = refs;
+      tasks.push(callImageApi('agnes', apiKey.trim(), payload));
     }
   }
 
@@ -1478,6 +1483,9 @@ function normalizeStoryShots(arr) {
       imageId: String(src.imageId || '').slice(0, 80) || null,
       imageFile: hasImage ? src.imageFile : null,
       imageUrl: typeof src.imageUrl === 'string' && /^https?:\/\//.test(src.imageUrl) ? src.imageUrl : null,
+      stillFile:
+        typeof src.stillFile === 'string' && src.stillFile.startsWith('/files/') ? src.stillFile : null,
+      stillUrl: typeof src.stillUrl === 'string' && /^https?:\/\//.test(src.stillUrl) ? src.stillUrl : null,
       videoId: String(src.videoId || '').slice(0, 80) || null,
       videoFile: typeof src.videoFile === 'string' && src.videoFile.startsWith('/files/') ? src.videoFile : null,
       videoUrl: typeof src.videoUrl === 'string' && /^https?:\/\//.test(src.videoUrl) ? src.videoUrl : null,
