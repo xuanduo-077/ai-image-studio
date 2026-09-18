@@ -326,8 +326,7 @@
           </div>
 
           <div class="story-batch">
-            <button type="button" class="btn-primary" id="story-batch-image-btn">批量生成设定图</button>
-            <button type="button" class="btn-primary" id="story-batch-still-btn">批量生成静帧</button>
+            <button type="button" class="ghost-btn" id="story-copy-prompts-btn" title="导出全部角色/场景/镜头提示词，逐条贴到图片界面生成">复制提示词清单</button>
             <button type="button" class="btn-primary" id="story-batch-video-btn">批量生成视频</button>
             <label class="check-row chain-row" for="story-chain" title="开启后：场景未变化的相邻镜头自动用上一段视频的尾帧作为下一段的首帧衔接；场景切换的镜头自动改用角色三视图 + 场景图参考生成">
               <input type="checkbox" id="story-chain" />
@@ -425,6 +424,19 @@
         <div class="error-box" id="key-error" role="alert" hidden></div>
         <button type="submit" class="btn-secondary">保存密钥</button>
       </form>
+    </div>
+  </div>
+
+  <!-- 故事工坊图库绑定弹窗 -->
+  <div class="modal-mask" id="story-picker-modal" hidden>
+    <div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="story-picker-title">
+      <div class="modal-head">
+        <h3 id="story-picker-title">从当前剧本图库选择图片</h3>
+        <button type="button" class="modal-close" id="story-picker-close" aria-label="关闭">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div class="picker-grid" id="story-picker-grid"></div>
     </div>
   </div>
 

@@ -1139,10 +1139,11 @@ ${JSON.stringify(scenes)}
 输出要求：
 1. cast：该镜头出场角色名的数组；空镜/环境镜头可为空数组
 2. scene：该镜头所属场景名，必须与场景卡中的场景名完全一致
-3. videoPrompt：40-80 字的完整画面描述 = 景别与机位（可用低角度仰拍/俯拍/过肩镜头/荷兰角增强戏剧性）+ 出场角色正在发生的动作（要有动作动词，神态具体，关键外貌特征要提及）+ 环境要点 + 镜头运动（推进/拉远/平移/跟随/环绕）；这是生成视频的唯一画面描述，必须完整自洽
-4. duration 只能是 4 或 5
-5. 镜头按叙事顺序覆盖完整故事弧（开端-发展-高潮-收尾）；同一场景的连续镜头尽量相邻排列（便于尾帧衔接）
-严格输出 JSON：{"shots":[{"index":1,"scene":"场景名","cast":["角色名"],"duration":4,"videoPrompt":"..."}]}
+3. imagePrompt：40-80 字的该镜头静帧构图描述 = 景别与机位（可用低角度仰拍/俯拍/过肩镜头/荷兰角）+ 出场角色的位置、动作与神态（关键外貌特征要提及）+ 环境要点 + 光线氛围；这是生成镜头静帧图片的构图描述，不要写镜头运动
+4. videoPrompt：30-60 字的视频运动描述 = 主体动作变化 + 镜头运动（推进/拉远/平移/跟随/环绕），与 imagePrompt 的构图衔接
+5. duration 只能是 4 或 5
+6. 镜头按叙事顺序覆盖完整故事弧（开端-发展-高潮-收尾）；同一场景的连续镜头尽量相邻排列（便于尾帧衔接）
+严格输出 JSON：{"shots":[{"index":1,"scene":"场景名","cast":["角色名"],"duration":4,"imagePrompt":"...","videoPrompt":"..."}]}
 只输出 JSON，不要任何其他文字。`;
 }
 
@@ -1165,7 +1166,10 @@ function validateShots(data, count) {
   const arr = Array.isArray(data && data.shots) ? data.shots : [];
   if (!arr.length) throw new Error('文本模型未返回任何镜头');
   return arr.slice(0, count).map((s, i) => {
-    if (!s || typeof s.videoPrompt !== 'string' || !s.videoPrompt.trim()) {
+    if (!s || typeof s.imagePrompt !== 'string' || !s.imagePrompt.trim()) {
+      throw new Error(`第 ${i + 1} 个镜头缺少静帧构图描述`);
+    }
+    if (typeof s.videoPrompt !== 'string' || !s.videoPrompt.trim()) {
       throw new Error(`第 ${i + 1} 个镜头缺少视频提示词`);
     }
     const dur = Number.parseInt(s.duration, 10) === 5 ? 5 : 4;
@@ -1180,8 +1184,8 @@ function validateShots(data, count) {
       scene: String(s.scene || '').slice(0, 30),
       cast,
       duration: dur,
+      imagePrompt: s.imagePrompt.trim().slice(0, 800),
       videoPrompt: s.videoPrompt.trim().slice(0, 500),
-      imagePrompt: typeof s.imagePrompt === 'string' ? s.imagePrompt.trim().slice(0, 2000) : '',
     };
   });
 }
@@ -1517,6 +1521,7 @@ function normalizeStoryCharacters(arr) {
       return {
         name,
         appearance: String((c && c.appearance) || '').slice(0, 300),
+        viewPrompt: String((c && c.viewPrompt) || '').slice(0, 4000),
         imageFile: hasImg ? c.imageFile : null,
         imageUrl: c && typeof c.imageUrl === 'string' && /^https?:\/\//.test(c.imageUrl) ? c.imageUrl : null,
       };
@@ -1534,6 +1539,7 @@ function normalizeStoryScenes(arr) {
       return {
         name,
         description: String((s && s.description) || '').slice(0, 200),
+        imagePrompt: String((s && s.imagePrompt) || '').slice(0, 4000),
         imageFile: hasImg ? s.imageFile : null,
         imageUrl: s && typeof s.imageUrl === 'string' && /^https?:\/\//.test(s.imageUrl) ? s.imageUrl : null,
       };
@@ -1562,6 +1568,7 @@ function normalizeStoryShots(arr) {
       imageId: String(src.imageId || '').slice(0, 80) || null,
       imageFile: hasImage ? src.imageFile : null,
       imageUrl: typeof src.imageUrl === 'string' && /^https?:\/\//.test(src.imageUrl) ? src.imageUrl : null,
+      stillPrompt: String(src.stillPrompt || '').slice(0, 4000),
       stillFile:
         typeof src.stillFile === 'string' && src.stillFile.startsWith('/files/') ? src.stillFile : null,
       stillUrl: typeof src.stillUrl === 'string' && /^https?:\/\//.test(src.stillUrl) ? src.stillUrl : null,

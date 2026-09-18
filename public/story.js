@@ -299,8 +299,9 @@ async function openProject(id) {
     storyState.current = data.story;
     storyState.currentId = data.story.id;
     inkosCanon = ''; // 打开已有项目时清除 InkOS 角色参考，避免干扰旧项目
+    ensureStoryPrompts(data.story);
     $('#story-current-title').textContent = data.story.title;
-    renderShots();
+    renderStoryAll();
     loadProjects();
   } catch (err) {
     showToast(err.message || '打开项目失败');
@@ -530,13 +531,15 @@ async function analyzeStory() {
 
     storyState.current = created.story;
     storyState.currentId = created.story.id;
+    ensureStoryPrompts(created.story);
+    saveStoryMeta();
     $('#story-current-title').textContent = created.story.title;
     renderStoryAll();
     switchStoryTab('characters');
     loadProjects();
     const usedLlm = data.usedLlm ? `（文本模型：${data.usedLlm}）` : '';
     showToast(
-      `分镜完成${usedLlm}：${created.story.characters.length} 个角色、${created.story.scenes.length} 个场景、${created.story.shots.length} 个镜头。请先在①②生成设定图，再到③制作视频`
+      `分镜完成${usedLlm}：${created.story.characters.length} 个角色、${created.story.scenes.length} 个场景、${created.story.shots.length} 个镜头。复制提示词到图片界面生成并回绑，再到③制作视频`
     );
   } catch (err) {
     showStoryError(err.message || '分镜分析失败');
@@ -725,6 +728,20 @@ function buildShotCard(shot, i) {
   head.appendChild(status);
   body.appendChild(head);
 
+  const spLabel = document.createElement('label');
+  spLabel.textContent = '静帧提示词（复制到图片界面生成，生成后回来绑定）';
+  body.appendChild(spLabel);
+  const sp = document.createElement('textarea');
+  sp.className = 'prompt-edit';
+  sp.rows = 5;
+  sp.value = shotStillPrompt(storyState.current, shot);
+  sp.placeholder = '镜头静帧提示词，可自由修改后复制使用';
+  sp.addEventListener('change', () => {
+    shot.stillPrompt = sp.value.trim().slice(0, 4000);
+    saveShotLater(i);
+  });
+  body.appendChild(sp);
+
   const vpLabel = document.createElement('label');
   vpLabel.textContent = '视频提示词（画面 + 运动）';
   body.appendChild(vpLabel);
@@ -740,13 +757,20 @@ function buildShotCard(shot, i) {
   const actions = document.createElement('div');
   actions.className = 'shot-actions';
 
-  const stillBtn = document.createElement('button');
-  stillBtn.type = 'button';
-  stillBtn.className = 'mini-btn';
-  stillBtn.textContent = shotHasStill(shot) ? '重新生成静帧' : '生成静帧';
-  if (shot.stillBusy || busy) stillBtn.disabled = true;
-  stillBtn.addEventListener('click', () => generateShotStill(shot, i, stillBtn));
-  actions.appendChild(stillBtn);
+  const copyStillBtn = document.createElement('button');
+  copyStillBtn.type = 'button';
+  copyStillBtn.className = 'mini-btn';
+  copyStillBtn.textContent = '复制静帧提示词';
+  copyStillBtn.addEventListener('click', () => copyText(shotStillPrompt(storyState.current, shot)));
+  actions.appendChild(copyStillBtn);
+
+  const bindStillBtn = document.createElement('button');
+  bindStillBtn.type = 'button';
+  bindStillBtn.className = 'mini-btn';
+  bindStillBtn.textContent = shotHasStill(shot) ? '更换静帧图片' : '从图库绑定静帧';
+  if (busy) bindStillBtn.disabled = true;
+  bindStillBtn.addEventListener('click', () => openStoryPicker({ type: 'shot', index: i }));
+  actions.appendChild(bindStillBtn);
 
   const vidBtn = document.createElement('button');
   vidBtn.type = 'button';
@@ -827,7 +851,7 @@ function buildCharacterCard(c, ci) {
   } else {
     const ph = document.createElement('div');
     ph.className = 'asset-placeholder';
-    ph.textContent = c.generating ? '三视图生成中…' : '尚未生成三视图';
+    ph.textContent = '尚未绑定三视图图片';
     card.appendChild(ph);
   }
 
@@ -839,28 +863,66 @@ function buildCharacterCard(c, ci) {
   name.textContent = c.name;
   body.appendChild(name);
 
-  const desc = document.createElement('textarea');
-  desc.className = 'asset-edit';
-  desc.rows = 3;
-  desc.value = c.appearance || '';
-  desc.placeholder = '外貌设定（生成三视图的依据，可编辑）';
-  desc.addEventListener('change', () => {
-    c.appearance = desc.value.trim().slice(0, 300);
+  const pl = document.createElement('label');
+  pl.textContent = '三视图提示词（复制到图片界面生成）';
+  body.appendChild(pl);
+  const ta = document.createElement('textarea');
+  ta.className = 'asset-edit prompt-edit';
+  ta.rows = 6;
+  ta.value = characterViewPrompt(storyState.current, c);
+  ta.placeholder = '三视图提示词，可自由修改后复制使用';
+  ta.addEventListener('change', () => {
+    c.viewPrompt = ta.value.trim().slice(0, 4000);
     saveStoryMeta();
   });
-  body.appendChild(desc);
+  body.appendChild(ta);
 
   const actions = document.createElement('div');
   actions.className = 'asset-actions';
-  const btn = document.createElement('button');
-  btn.type = 'button';
-  btn.className = 'mini-btn primary';
-  btn.textContent = shotHasView(c) ? '重新生成三视图' : '生成三视图';
-  if (c.generating || storyState.batchRunning) btn.disabled = true;
-  btn.addEventListener('click', () => generateCharacterView(ci, btn));
-  actions.appendChild(btn);
-  body.appendChild(actions);
 
+  const copyBtn = document.createElement('button');
+  copyBtn.type = 'button';
+  copyBtn.className = 'mini-btn primary';
+  copyBtn.textContent = '复制提示词';
+  copyBtn.addEventListener('click', () => copyText(characterViewPrompt(storyState.current, c)));
+  actions.appendChild(copyBtn);
+
+  const bindBtn = document.createElement('button');
+  bindBtn.type = 'button';
+  bindBtn.className = 'mini-btn';
+  bindBtn.textContent = shotHasView(c) ? '更换三视图图片' : '从图库绑定';
+  bindBtn.addEventListener('click', () => openStoryPicker({ type: 'character', index: ci }));
+  actions.appendChild(bindBtn);
+
+  const reBtn = document.createElement('button');
+  reBtn.type = 'button';
+  reBtn.className = 'mini-btn';
+  reBtn.textContent = '重组';
+  reBtn.title = '按当前风格与外貌设定重新组装提示词（覆盖手动修改）';
+  reBtn.addEventListener('click', () => {
+    c.viewPrompt = assembleCharacterViewPrompt(storyState.current, c);
+    saveStoryMeta();
+    renderCharacters();
+    showToast('提示词已按当前设定重组');
+  });
+  actions.appendChild(reBtn);
+
+  if (shotHasView(c)) {
+    const unbindBtn = document.createElement('button');
+    unbindBtn.type = 'button';
+    unbindBtn.className = 'mini-btn';
+    unbindBtn.textContent = '解绑';
+    unbindBtn.addEventListener('click', () => {
+      c.imageId = null;
+      c.imageFile = null;
+      c.imageUrl = null;
+      saveStoryMeta();
+      renderCharacters();
+    });
+    actions.appendChild(unbindBtn);
+  }
+
+  body.appendChild(actions);
   card.appendChild(body);
   return card;
 }
@@ -878,7 +940,7 @@ function buildSceneCard(s, si) {
   } else {
     const ph = document.createElement('div');
     ph.className = 'asset-placeholder';
-    ph.textContent = s.generating ? '场景图生成中…' : '尚未生成场景图';
+    ph.textContent = '尚未绑定场景图片';
     card.appendChild(ph);
   }
 
@@ -890,28 +952,66 @@ function buildSceneCard(s, si) {
   name.textContent = s.name;
   body.appendChild(name);
 
-  const desc = document.createElement('textarea');
-  desc.className = 'asset-edit';
-  desc.rows = 3;
-  desc.value = s.description || '';
-  desc.placeholder = '场景设定（生成场景图的依据，可编辑）';
-  desc.addEventListener('change', () => {
-    s.description = desc.value.trim().slice(0, 200);
+  const pl = document.createElement('label');
+  pl.textContent = '场景提示词（复制到图片界面生成）';
+  body.appendChild(pl);
+  const ta = document.createElement('textarea');
+  ta.className = 'asset-edit prompt-edit';
+  ta.rows = 6;
+  ta.value = sceneImagePrompt(storyState.current, s);
+  ta.placeholder = '场景提示词，可自由修改后复制使用';
+  ta.addEventListener('change', () => {
+    s.imagePrompt = ta.value.trim().slice(0, 4000);
     saveStoryMeta();
   });
-  body.appendChild(desc);
+  body.appendChild(ta);
 
   const actions = document.createElement('div');
   actions.className = 'asset-actions';
-  const btn = document.createElement('button');
-  btn.type = 'button';
-  btn.className = 'mini-btn primary';
-  btn.textContent = shotHasView(s) ? '重新生成场景图' : '生成场景图';
-  if (s.generating || storyState.batchRunning) btn.disabled = true;
-  btn.addEventListener('click', () => generateSceneImage(si, btn));
-  actions.appendChild(btn);
-  body.appendChild(actions);
 
+  const copyBtn = document.createElement('button');
+  copyBtn.type = 'button';
+  copyBtn.className = 'mini-btn primary';
+  copyBtn.textContent = '复制提示词';
+  copyBtn.addEventListener('click', () => copyText(sceneImagePrompt(storyState.current, s)));
+  actions.appendChild(copyBtn);
+
+  const bindBtn = document.createElement('button');
+  bindBtn.type = 'button';
+  bindBtn.className = 'mini-btn';
+  bindBtn.textContent = shotHasView(s) ? '更换场景图片' : '从图库绑定';
+  bindBtn.addEventListener('click', () => openStoryPicker({ type: 'scene', index: si }));
+  actions.appendChild(bindBtn);
+
+  const reBtn = document.createElement('button');
+  reBtn.type = 'button';
+  reBtn.className = 'mini-btn';
+  reBtn.textContent = '重组';
+  reBtn.title = '按当前风格与场景设定重新组装提示词（覆盖手动修改）';
+  reBtn.addEventListener('click', () => {
+    s.imagePrompt = assembleSceneImagePrompt(storyState.current, s);
+    saveStoryMeta();
+    renderScenes();
+    showToast('提示词已按当前设定重组');
+  });
+  actions.appendChild(reBtn);
+
+  if (shotHasView(s)) {
+    const unbindBtn = document.createElement('button');
+    unbindBtn.type = 'button';
+    unbindBtn.className = 'mini-btn';
+    unbindBtn.textContent = '解绑';
+    unbindBtn.addEventListener('click', () => {
+      s.imageId = null;
+      s.imageFile = null;
+      s.imageUrl = null;
+      saveStoryMeta();
+      renderScenes();
+    });
+    actions.appendChild(unbindBtn);
+  }
+
+  body.appendChild(actions);
   card.appendChild(body);
   return card;
 }
@@ -938,6 +1038,220 @@ function renderStoryAll() {
   renderCharacters();
   renderScenes();
   renderShots();
+}
+
+/* ---------------- 提示词组装与图库绑定（提示词导演台） ---------------- */
+
+function assembleCharacterViewPrompt(story, c) {
+  const style = (story && story.style) || '';
+  return [
+    style || null,
+    '角色三视图设定图：同一角色的三个视角横向等距并排——正面全身、侧面全身、背面全身，自然站立姿势，全身完整可见，三个视角大小一致',
+    `角色「${c.name}」：${c.appearance}`,
+    '版式与背景：纯浅灰色无缝背景，画面中只有这一个角色，无任何文字标注',
+    '光照与质感：柔和均匀的棚拍光，无强烈投影；线条清晰，布料纹理与发丝层次细节丰富',
+    '一致性约束（最高优先）：三个视角的五官、发型、服装、配饰完全一致',
+    '负面约束：不要多余角色，不要复杂背景，不要文字水印，不要改变角色特征',
+  ]
+    .filter(Boolean)
+    .join('。');
+}
+
+function assembleSceneImagePrompt(story, s) {
+  const style = (story && story.style) || '';
+  return [
+    style || null,
+    `场景设定图：${s.description}`,
+    '镜头语言：广角建立镜头，前景、中景、远景层次分明，空间纵深强',
+    '光照与氛围：光线方向明确，冷暖层次细腻，氛围沉浸',
+    '质感与细节：材质纹理具体（按场景对应石材/织物/金属/植被），微观细节点缀，主体清晰',
+    '负面约束：画面中不出现任何人物，不要文字水印，不要模糊',
+  ]
+    .filter(Boolean)
+    .join('。');
+}
+
+function assembleStillPrompt(story, shot) {
+  const style = (story && story.style) || '';
+  const scene = storySceneOf(shot);
+  const cast = storyCastOf(shot);
+  return [
+    style || null,
+    '生成一张 16:9 电影镜头静帧（将作为视频首帧），电影级构图与光线',
+    `画面内容：${shot.imagePrompt || shot.videoPrompt || ''}`,
+    ...cast.filter((c) => c.appearance).map((c) => `角色「${c.name}」外貌：${c.appearance}`),
+    scene && scene.description ? `场景环境：${scene.description}` : null,
+    '构图符合描述中的景别与机位，角色外貌与场景环境严格一致',
+    '负面约束：不要文字水印，不要多余角色，不要画面模糊',
+  ]
+    .filter(Boolean)
+    .join('。');
+}
+
+function characterViewPrompt(story, c) {
+  return c.viewPrompt || assembleCharacterViewPrompt(story, c);
+}
+
+function sceneImagePrompt(story, s) {
+  return s.imagePrompt || assembleSceneImagePrompt(story, s);
+}
+
+function shotStillPrompt(story, s) {
+  return s.stillPrompt || assembleStillPrompt(story, s);
+}
+
+/** 打开/创建故事后补齐缺失的提示词（旧项目兼容） */
+function ensureStoryPrompts(story) {
+  if (!story) return;
+  (story.characters || []).forEach((c) => {
+    if (!c.viewPrompt) c.viewPrompt = assembleCharacterViewPrompt(story, c);
+  });
+  (story.scenes || []).forEach((s) => {
+    if (!s.imagePrompt) s.imagePrompt = assembleSceneImagePrompt(story, s);
+  });
+  (story.shots || []).forEach((s) => {
+    if (!s.stillPrompt) s.stillPrompt = assembleStillPrompt(story, s);
+  });
+}
+
+function copyText(text) {
+  const done = () => showToast('已复制到剪贴板');
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done, () => fallbackCopyText(text, done));
+  } else {
+    fallbackCopyText(text, done);
+  }
+}
+
+function fallbackCopyText(text, done) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.select();
+  try {
+    document.execCommand('copy');
+    done();
+  } catch {
+    showToast('复制失败，请手动选择复制');
+  }
+  document.body.removeChild(ta);
+}
+
+function copyAllPrompts() {
+  const story = storyState.current;
+  if (!story) {
+    showToast('请先选择或创建故事项目');
+    return;
+  }
+  ensureStoryPrompts(story);
+  const lines = [`【${story.title}·提示词清单】`, '', '▼ 角色三视图'];
+  (story.characters || []).forEach((c, i) => lines.push(``, `[角色${i + 1}·${c.name}]`, characterViewPrompt(story, c)));
+  lines.push('', '▼ 场景设定图');
+  (story.scenes || []).forEach((s, i) => lines.push(``, `[场景${i + 1}·${s.name}]`, sceneImagePrompt(story, s)));
+  lines.push('', '▼ 镜头静帧');
+  (story.shots || []).forEach((s, i) =>
+    lines.push(``, `[镜头${i + 1}${s.scene ? '·' + s.scene : ''}]`, shotStillPrompt(story, s))
+  );
+  copyText(lines.join('\n'));
+}
+
+/* ---------------- 图库绑定弹窗 ---------------- */
+
+let storyPickerTarget = null;
+
+function openStoryPicker(target) {
+  if (!auth.user) {
+    showToast('请先登录账户');
+    return;
+  }
+  storyPickerTarget = target;
+  const grid = $('#story-picker-grid');
+  grid.innerHTML = '';
+  const tip = document.createElement('p');
+  tip.className = 'picker-empty';
+  tip.textContent = '加载当前剧本的图片…';
+  grid.appendChild(tip);
+  $('#story-picker-modal').hidden = false;
+  fetch('/api/history', { headers: authHeaders() })
+    .then((r) => r.json())
+    .then((data) => {
+      grid.innerHTML = '';
+      const items = ((data && data.items) || []).filter(
+        (r) => r.type === 'image' && (r.scriptId || 'script-default') === activeScriptId() && (r.file || r.url)
+      );
+      if (!items.length) {
+        const empty = document.createElement('p');
+        empty.className = 'picker-empty';
+        empty.textContent = '当前剧本的图库为空——先去图片界面用提示词生成图片，再回来绑定';
+        grid.appendChild(empty);
+        return;
+      }
+      items.forEach((rec) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'picker-item';
+        btn.title = (rec.prompt || '').slice(0, 60);
+        const img = document.createElement('img');
+        img.loading = 'lazy';
+        img.alt = '选择此图';
+        img.src = rec.file || `/api/image?url=${encodeURIComponent(rec.url)}`;
+        btn.appendChild(img);
+        btn.addEventListener('click', () => {
+          bindStoryImage(rec);
+          closeStoryPicker();
+        });
+        grid.appendChild(btn);
+      });
+    })
+    .catch(() => {
+      grid.innerHTML = '';
+      const empty = document.createElement('p');
+      empty.className = 'picker-empty';
+      empty.textContent = '图库加载失败，请稍后重试';
+      grid.appendChild(empty);
+    });
+}
+
+function bindStoryImage(rec) {
+  const t = storyPickerTarget;
+  const story = storyState.current;
+  if (!t || !story) return;
+  const file = rec.file || null;
+  const url = rec.url || null;
+  if (t.type === 'character') {
+    const c = (story.characters || [])[t.index];
+    if (!c) return;
+    c.imageId = rec.id;
+    c.imageFile = file;
+    c.imageUrl = url;
+    saveStoryMeta();
+    renderCharacters();
+  } else if (t.type === 'scene') {
+    const s = (story.scenes || [])[t.index];
+    if (!s) return;
+    s.imageId = rec.id;
+    s.imageFile = file;
+    s.imageUrl = url;
+    saveStoryMeta();
+    renderScenes();
+  } else if (t.type === 'shot') {
+    const shot = (story.shots || [])[t.index];
+    if (!shot) return;
+    shot.stillId = rec.id;
+    shot.stillFile = file;
+    shot.stillUrl = url;
+    saveShotNow(t.index);
+    renderShots();
+  }
+  showToast('已绑定所选图片');
+}
+
+function closeStoryPicker() {
+  const modal = $('#story-picker-modal');
+  if (modal) modal.hidden = true;
+  storyPickerTarget = null;
 }
 
 /* ---------------- 密钥选择（复用账户密钥库） ---------------- */
@@ -1010,205 +1324,6 @@ async function saveStoryMeta() {
     });
   } catch {
     /* 保存失败不打断生成流程 */
-  }
-}
-
-async function generateCharacterView(ci, btn) {
-  const story = storyState.current;
-  const c = story && Array.isArray(story.characters) ? story.characters[ci] : null;
-  if (!c || c.generating) return;
-  const apiKey = storyKey('sensenova');
-  if (!apiKey) {
-    showToast('请先配置商汤图片 Key');
-    return;
-  }
-  const old = btn ? btn.textContent : '';
-  if (btn) {
-    btn.disabled = true;
-    btn.textContent = '生成中…';
-  }
-  c.generating = true;
-  renderCharacters();
-  try {
-    const style = story.style || '电影感插画风格';
-    const prompt = [
-      `${style}`,
-      `角色三视图设定图：同一角色的三个视角横向等距并排——正面全身、侧面全身、背面全身，自然站立姿势，全身完整可见，三个视角大小一致`,
-      `角色「${c.name}」：${c.appearance}`,
-      `版式与背景：纯浅灰色无缝背景，画面中只有这一个角色，无任何文字标注`,
-      `光照与质感：柔和均匀的棚拍光，无强烈投影；线条清晰，布料纹理与发丝层次细节丰富`,
-      `一致性约束（最高优先）：三个视角的五官、发型、服装、配饰完全一致`,
-      `负面约束：不要多余角色，不要复杂背景，不要文字水印，不要改变角色特征`,
-    ].join('。');
-    const resp = await fetch('/api/generate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        provider: 'sensenova',
-        apiKey,
-        prompt,
-        model: state.model.sensenova,
-        size: STORY_SHOT_IMAGE_SIZE,
-        n: 1,
-        watermark: false,
-      }),
-    });
-    const data = await resp.json().catch(() => ({}));
-    if (!resp.ok) throw new Error(data.error || `请求失败（HTTP ${resp.status}）`);
-    const rec = (data.records || [])[0];
-    if (!rec) throw new Error('未返回图片记录');
-    c.imageId = rec.id;
-    c.imageFile = rec.file || null;
-    c.imageUrl = rec.url || null;
-    await saveStoryMeta();
-  } catch (err) {
-    showToast(`「${c.name}」三视图生成失败：${err.message}`);
-  } finally {
-    c.generating = false;
-    if (btn) {
-      btn.disabled = false;
-      btn.textContent = old;
-    }
-    renderCharacters();
-  }
-}
-
-async function generateSceneImage(si, btn) {
-  const story = storyState.current;
-  const s = story && Array.isArray(story.scenes) ? story.scenes[si] : null;
-  if (!s || s.generating) return;
-  const apiKey = storyKey('sensenova');
-  if (!apiKey) {
-    showToast('请先配置商汤图片 Key');
-    return;
-  }
-  const old = btn ? btn.textContent : '';
-  if (btn) {
-    btn.disabled = true;
-    btn.textContent = '生成中…';
-  }
-  s.generating = true;
-  renderScenes();
-  try {
-    const style = story.style || '电影感插画风格';
-    const prompt = [
-      `${style}`,
-      `场景设定图：${s.description}`,
-      `镜头语言：广角建立镜头，前景、中景、远景层次分明，空间纵深强`,
-      `光照与氛围：光线方向明确，冷暖层次细腻，氛围沉浸`,
-      `质感与细节：材质纹理具体（按场景对应石材/织物/金属/植被），微观细节点缀，主体清晰`,
-      `负面约束：画面中不出现任何人物，不要文字水印，不要模糊`,
-    ].join('。');
-    const resp = await fetch('/api/generate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        provider: 'sensenova',
-        apiKey,
-        prompt,
-        model: state.model.sensenova,
-        size: STORY_SHOT_IMAGE_SIZE,
-        n: 1,
-        watermark: false,
-      }),
-    });
-    const data = await resp.json().catch(() => ({}));
-    if (!resp.ok) throw new Error(data.error || `请求失败（HTTP ${resp.status}）`);
-    const rec = (data.records || [])[0];
-    if (!rec) throw new Error('未返回图片记录');
-    s.imageId = rec.id;
-    s.imageFile = rec.file || null;
-    s.imageUrl = rec.url || null;
-    await saveStoryMeta();
-  } catch (err) {
-    showToast(`场景「${s.name}」生成失败：${err.message}`);
-  } finally {
-    s.generating = false;
-    if (btn) {
-      btn.disabled = false;
-      btn.textContent = old;
-    }
-    renderScenes();
-  }
-}
-
-/** 生成镜头静帧：Agnes 图生图（场景图 + 角色三视图作参考图），作为视频 keyframe 首帧 */
-async function generateShotStill(shot, i, btn) {
-  const apiKey = storyKey('agnes');
-  if (!apiKey) {
-    showToast('请先配置 Agnes Key（静帧使用 Agnes 图生图）');
-    return;
-  }
-  if (shot.stillBusy) return;
-  const story = storyState.current;
-  const scene = storySceneOf(shot);
-  const cast = storyCastOf(shot);
-
-  const refs = [];
-  const refNotes = [];
-  if (scene && shotHasView(scene)) {
-    refs.push(scene.imageFile ? { kind: 'file', value: scene.imageFile } : { kind: 'url', value: scene.imageUrl });
-    refNotes.push(`第 ${refs.length} 张参考图是本镜头的场景环境设定`);
-  }
-  cast
-    .filter(shotHasView)
-    .forEach((c) => {
-      if (refs.length >= 3) return;
-      refs.push(c.imageFile ? { kind: 'file', value: c.imageFile } : { kind: 'url', value: c.imageUrl });
-      refNotes.push(`第 ${refs.length} 张参考图是角色「${c.name}」的三视图外貌设定`);
-    });
-
-  const style = (story && story.style) || '';
-  const prompt = [
-    style || null,
-    '生成一张 16:9 电影镜头静帧（将作为视频首帧），电影级构图与光线',
-    ...refNotes,
-    `画面内容：${shot.videoPrompt || ''}`,
-    '角色外貌、发型与服装必须严格与角色三视图参考一致，场景环境与场景参考图一致',
-    '负面约束：不要文字水印，不要多余角色，不要画面模糊，不要改变角色外貌',
-  ]
-    .filter(Boolean)
-    .join('。');
-
-  const old = btn ? btn.textContent : '';
-  if (btn) {
-    btn.disabled = true;
-    btn.textContent = '生成中…';
-  }
-  shot.stillBusy = true;
-  renderShots();
-  try {
-    const resp = await fetch('/api/generate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        provider: 'agnes',
-        apiKey,
-        prompt,
-        model: state.model.agnes,
-        size: '1K',
-        ratio: '16:9',
-        n: 1,
-        referenceImages: refs,
-      }),
-    });
-    const data = await resp.json().catch(() => ({}));
-    if (!resp.ok) throw new Error(data.error || `请求失败（HTTP ${resp.status}）`);
-    const rec = (data.records || [])[0];
-    if (!rec) throw new Error('未返回图片记录');
-    shot.stillId = rec.id;
-    shot.stillFile = rec.file || null;
-    shot.stillUrl = rec.url || null;
-    await saveShotNow(i);
-  } catch (err) {
-    showToast(`镜头 ${i + 1} 静帧生成失败：${err.message}`);
-  } finally {
-    shot.stillBusy = false;
-    if (btn) {
-      btn.disabled = false;
-      btn.textContent = old;
-    }
-    renderShots();
   }
 }
 
@@ -1462,87 +1577,6 @@ function startShotPolling(shot, i) {
 
 /* ---------------- 批量制作 ---------------- */
 
-async function batchAssets() {
-  if (storyState.batchRunning) return;
-  const story = storyState.current;
-  if (!story) {
-    showToast('请先选择或创建故事项目');
-    return;
-  }
-  if (!storyKey('sensenova')) {
-    showToast('请先配置商汤图片 Key');
-    return;
-  }
-  const jobs = [];
-  (story.characters || []).forEach((c, ci) => {
-    if (!shotHasView(c)) jobs.push({ type: 'character', c, ci });
-  });
-  (story.scenes || []).forEach((s, si) => {
-    if (!shotHasView(s)) jobs.push({ type: 'scene', s, si });
-  });
-  if (!jobs.length) {
-    showToast('角色三视图与场景图都已生成');
-    return;
-  }
-  if (!confirm(`将按顺序生成 ${jobs.length} 张设定图（每张约 30-60 秒），继续？`)) return;
-
-  storyState.batchRunning = true;
-  let ok = 0;
-  let fail = 0;
-  for (const job of jobs) {
-    if (!storyState.batchRunning) break;
-    $('#story-progress').textContent = `设定图 ${ok + fail + 1}/${jobs.length}（${
-      job.type === 'character' ? '角色·' + job.c.name : '场景·' + job.s.name
-    }）…`;
-    try {
-      if (job.type === 'character') await generateCharacterView(job.ci, null);
-      else await generateSceneImage(job.si, null);
-      if (shotHasView(job.c) || shotHasView(job.s)) ok += 1;
-      else fail += 1;
-    } catch {
-      fail += 1;
-    }
-  }
-  storyState.batchRunning = false;
-  $('#story-progress').textContent = '';
-  showToast(`设定图批量生成完成：成功 ${ok} 张${fail ? `，失败 ${fail} 张（可单独重试）` : ''}`);
-}
-
-async function batchStills() {
-  if (storyState.batchRunning) return;
-  const story = storyState.current;
-  if (!story) {
-    showToast('请先选择或创建故事项目');
-    return;
-  }
-  if (!storyKey('agnes')) {
-    showToast('请先配置 Agnes Key（静帧使用 Agnes 图生图）');
-    return;
-  }
-  const targets = story.shots
-    .map((shot, i) => ({ shot, i }))
-    .filter(({ shot }) => !shotHasStill(shot) && !shot.stillBusy);
-  if (!targets.length) {
-    showToast('所有镜头都已有静帧');
-    return;
-  }
-  if (!confirm(`将按顺序生成 ${targets.length} 张镜头静帧（Agnes 图生图，每张约 20-60 秒），继续？`)) return;
-
-  storyState.batchRunning = true;
-  let ok = 0;
-  let fail = 0;
-  for (const { shot, i } of targets) {
-    if (!storyState.batchRunning) break;
-    $('#story-progress').textContent = `静帧 ${ok + fail + 1}/${targets.length}（镜头 ${i + 1}）…`;
-    await generateShotStill(shot, i, null);
-    if (shotHasStill(shot)) ok += 1;
-    else fail += 1;
-  }
-  storyState.batchRunning = false;
-  $('#story-progress').textContent = '';
-  showToast(`静帧批量生成完成：成功 ${ok} 张${fail ? `，失败 ${fail} 张（可单独重试）` : ''}`);
-}
-
 async function batchVideos() {
   if (storyState.batchRunning) return;
   const story = storyState.current;
@@ -1715,8 +1749,7 @@ function initStory() {
   $('#story-project-select').addEventListener('change', (e) => openProject(e.target.value));
   $('#story-delete-btn').addEventListener('click', deleteProject);
   $('#story-analyze-btn').addEventListener('click', analyzeStory);
-  $('#story-batch-image-btn').addEventListener('click', batchAssets);
-  $('#story-batch-still-btn').addEventListener('click', batchStills);
+  $('#story-copy-prompts-btn').addEventListener('click', copyAllPrompts);
   $('#story-batch-video-btn').addEventListener('click', batchVideos);
   $('#story-tab-characters').addEventListener('click', () => switchStoryTab('characters'));
   $('#story-tab-scenes').addEventListener('click', () => switchStoryTab('scenes'));
@@ -1730,6 +1763,11 @@ function initStory() {
 
   $('#inkos-book-select').addEventListener('change', (e) => loadInkosChapters(e.target.value));
   $('#inkos-pull-btn').addEventListener('click', pullInkosChapter);
+
+  $('#story-picker-close').addEventListener('click', closeStoryPicker);
+  $('#story-picker-modal').addEventListener('click', (e) => {
+    if (e.target === $('#story-picker-modal')) closeStoryPicker();
+  });
 
   $('#story-sensenova-key-select').addEventListener('change', renderStoryKeySelects);
   $('#story-agnes-key-select').addEventListener('change', renderStoryKeySelects);
