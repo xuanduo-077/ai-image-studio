@@ -1,0 +1,11 @@
+services:
+  ai-image-studio:
+    build: .
+    image: ai-image-studio:latest
+    container_name: ai-image-studio
+    restart: unless-stopped
+    ports:
+      - "8787:3000"
+    environment:
+      - TZ=Asia/Shanghai
+      - PORT=3000

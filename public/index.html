@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="AI 图片生成工作台：支持商汤 SenseNova 与 Agnes 文生图模型" />
+  <title>AI 图片工作台</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23f59e0b' d='M12 2l2.4 7.6L22 12l-7.6 2.4L12 22l-2.4-7.6L2 12l7.6-2.4z'/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-logo" aria-hidden="true">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l2.4 7.6L22 12l-7.6 2.4L12 22l-2.4-7.6L2 12l7.6-2.4z"/></svg>
+        </span>
+        <div class="brand-text">
+          <h1>AI 图片工作台</h1>
+          <p>商汤 SenseNova × Agnes · 文生图 / 图生视频</p>
+        </div>
+      </div>
+      <div class="topbar-right">
+        <div class="status-badge" id="status-badge"><span class="dot"></span><span id="status-text">检查服务中…</span></div>
+        <div class="user-area" id="user-area"></div>
+      </div>
+    </header>
+
+    <nav class="workspace-tabs" role="tablist" aria-label="工作区切换">
+      <button type="button" class="ws-tab active" data-ws="story" aria-selected="true">故事工坊</button>
+      <button type="button" class="ws-tab" data-ws="image" aria-selected="false">图片</button>
+      <button type="button" class="ws-tab" data-ws="video" aria-selected="false">视频</button>
+    </nav>
+
+    <main class="layout" id="ws-image" hidden>
+      <!-- 左侧：设置面板 -->
+      <aside class="panel settings-panel" aria-label="生成设置">
+        <section class="field">
+          <label class="field-label" id="provider-label">模型服务商</label>
+          <div class="provider-grid" id="provider-grid" role="group" aria-labelledby="provider-label">
+            <button type="button" class="provider-card" data-provider="sensenova" aria-pressed="false">
+              <span class="provider-name">商汤 SenseNova</span>
+              <span class="provider-model">u1-fast · u1.5-lite</span>
+            </button>
+            <button type="button" class="provider-card" data-provider="agnes" aria-pressed="false">
+              <span class="provider-name">Agnes AI</span>
+              <span class="provider-model">agnes-image-2.5-flash</span>
+            </button>
+          </div>
+        </section>
+
+        <section class="field" id="sensenova-model-field">
+          <label class="field-label" id="model-label">模型</label>
+          <div class="chips" id="model-chips" role="group" aria-labelledby="model-label"></div>
+        </section>
+
+        <section class="field">
+          <label class="field-label" for="api-key">API Key</label>
+          <div class="saved-keys-row" id="saved-keys-row" hidden>
+            <select id="saved-key-select" aria-label="选择已保存的密钥"></select>
+            <button type="button" class="ghost-btn" id="manage-keys-btn">管理</button>
+          </div>
+          <div class="key-row">
+            <input id="api-key" type="password" placeholder="粘贴 API Key" autocomplete="off" spellcheck="false" />
+            <button type="button" class="ghost-btn icon-btn" id="toggle-key" aria-label="显示或隐藏 API Key">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>
+            </button>
+          </div>
+          <p class="hint" id="key-hint"></p>
+        </section>
+
+        <section class="field">
+          <label class="field-label" for="prompt">提示词 Prompt</label>
+          <textarea id="prompt" rows="5" placeholder="描述你想要的画面，例如：一只戴着宇航员头盔的橘猫漂浮在星云中，电影级光效，超高细节"></textarea>
+        </section>
+
+        <section class="field" id="sensenova-size-field">
+          <label class="field-label" for="size-input">图像尺寸（宽 × 高）</label>
+          <div class="chips" id="size-presets" role="group" aria-label="尺寸预设"></div>
+          <input id="size-input" class="text-input" type="text" placeholder="自定义尺寸，如 2752x1536" spellcheck="false" />
+        </section>
+
+        <section class="field" id="agnes-size-field" hidden>
+          <label class="field-label" id="agnes-size-label">分辨率</label>
+          <div class="chips" id="agnes-size-chips" role="group" aria-labelledby="agnes-size-label"></div>
+          <label class="field-label gap-top" id="ratio-label">画面比例</label>
+          <div class="chips" id="ratio-chips" role="group" aria-labelledby="ratio-label"></div>
+        </section>
+
+        <section class="field">
+          <label class="field-label" id="count-label">生成数量</label>
+          <div class="chips" id="count-chips" role="group" aria-labelledby="count-label"></div>
+        </section>
+
+        <section class="field" id="watermark-field">
+          <label class="check-row" for="watermark">
+            <input type="checkbox" id="watermark" />
+            <span>添加水印</span>
+            <em class="hint-inline">公测期间免费去水印</em>
+          </label>
+        </section>
+
+        <button type="button" class="btn-primary" id="generate-btn">立即生成</button>
+        <div class="error-box" id="error-box" role="alert" hidden></div>
+      </aside>
+
+      <!-- 右侧：结果画廊 -->
+      <section class="panel gallery-panel" aria-label="生成结果">
+        <div class="gallery-head">
+          <h2>生成结果<span id="result-count"></span></h2>
+          <button type="button" class="ghost-btn" id="clear-btn">清空</button>
+        </div>
+        <div class="gallery-grid" id="gallery-grid"></div>
+        <div class="empty-state" id="empty-state">
+          <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+          <p>生成的图片将展示在这里</p>
+          <span>填写 API Key 与提示词，点击「立即生成」开始创作</span>
+        </div>
+      </section>
+      </main>
+
+      <!-- 视频工作区 -->
+      <main class="layout ws-video-wrap" id="ws-video" hidden>
+      <section class="panel video-panel video-panel-page" aria-label="视频生成">
+        <div class="video-head">
+          <h2>视频生成</h2>
+          <p class="video-sub">Agnes · agnes-video-2.5-flash</p>
+        </div>
+
+        <section class="field">
+          <label class="field-label" id="vmode-label">生成模式</label>
+          <div class="tab-row" role="group" aria-labelledby="vmode-label">
+            <button type="button" class="tab active" id="vtab-reference" aria-pressed="true">参考图生视频</button>
+            <button type="button" class="tab" id="vtab-keyframe" aria-pressed="false">首尾帧控制</button>
+          </div>
+        </section>
+
+        <section class="field">
+          <label class="field-label" for="video-key">Agnes API Key</label>
+          <div class="saved-keys-row" id="video-keys-row" hidden>
+            <select id="video-key-select" aria-label="选择已保存的 Agnes 密钥"></select>
+          </div>
+          <div class="key-row">
+            <input id="video-key" type="password" placeholder="粘贴 Agnes API Key" autocomplete="off" spellcheck="false" />
+            <button type="button" class="ghost-btn icon-btn" id="toggle-video-key" aria-label="显示或隐藏视频 API Key">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>
+            </button>
+          </div>
+        </section>
+
+        <section class="field">
+          <label class="field-label" for="video-prompt">视频提示词</label>
+          <textarea id="video-prompt" rows="3" placeholder="参考模式可用 <Picture 1> 指代第一张参考图，例如：以 <Picture 1> 中的角色为主角，在花田中自然奔跑，保持外观一致"></textarea>
+        </section>
+
+        <section class="field" id="ref-slots-field">
+          <label class="field-label">参考图（最多 3 张）</label>
+          <div id="ref-slots" class="slot-list"></div>
+        </section>
+
+        <section class="field" id="kf-slots-field" hidden>
+          <label class="field-label">首尾帧（至少设置一张）</label>
+          <div class="kf-grid">
+            <div class="slot-box" data-slot="first"></div>
+            <div class="slot-box" data-slot="last"></div>
+          </div>
+        </section>
+
+        <section class="field">
+          <label class="field-label" id="vsec-label">视频时长</label>
+          <div class="chips" id="vsec-chips" role="group" aria-labelledby="vsec-label"></div>
+        </section>
+
+        <section class="field">
+          <label class="field-label" id="vsize-label">分辨率</label>
+          <div class="chips" id="vsize-chips" role="group" aria-labelledby="vsize-label"></div>
+        </section>
+
+        <section class="field" id="vratio-field">
+          <label class="field-label" id="vratio-label">画面比例</label>
+          <div class="chips" id="vratio-chips" role="group" aria-labelledby="vratio-label"></div>
+        </section>
+
+        <button type="button" class="btn-primary" id="video-generate-btn">生成视频</button>
+        <div class="error-box" id="video-error-box" role="alert" hidden></div>
+
+        <div class="video-results-head">
+          <h3>视频结果<span id="video-result-count"></span></h3>
+          <button type="button" class="ghost-btn" id="video-clear-btn">清空</button>
+        </div>
+        <div class="video-list" id="video-list"></div>
+        <div class="empty-state empty-compact" id="video-empty">
+          <p>生成的视频将展示在这里</p>
+          <span>从图片画廊选取参考图或首尾帧，点击「生成视频」</span>
+        </div>
+      </section>
+
+      <!-- 成片合成 -->
+      <section class="panel render-panel" aria-label="成片合成">
+        <div class="video-head">
+          <h2>成片合成</h2>
+          <p class="video-sub">拼接分段视频 · 1080p 精细化</p>
+        </div>
+        <div class="render-tools">
+          <button type="button" class="ghost-btn" id="render-selectall-btn">全选（时间正序）</button>
+          <button type="button" class="ghost-btn" id="render-reverse-btn">反转顺序</button>
+          <button type="button" class="ghost-btn" id="render-clear-btn">清空</button>
+        </div>
+        <div class="render-seg-list" id="render-seg-list"></div>
+        <label class="check-row" for="render-hd">
+          <input type="checkbox" id="render-hd" />
+          <span>1080p 精细化（lanczos 放大 + 轻度锐化）</span>
+        </label>
+        <button type="button" class="btn-primary" id="render-start-btn">合成成片</button>
+        <div class="error-box" id="render-error-box" role="alert" hidden></div>
+        <div class="render-jobs-head"><h3>合成任务</h3></div>
+        <div class="render-jobs" id="render-jobs"></div>
+        <p class="hint">分段越多、开启精细化后合成耗时越长；任务在后台进行，可随时回来查看进度。</p>
+      </section>
+      </main>
+
+      <!-- 故事工坊 -->
+      <main class="layout story-layout" id="ws-story">
+        <aside class="panel story-side" aria-label="故事改编">
+          <section class="field">
+            <div class="field-label-row">
+              <label class="field-label">文本模型</label>
+              <button type="button" class="ghost-btn" id="llm-add-btn">新增配置</button>
+            </div>
+            <div id="llm-config-list" class="llm-list"></div>
+            <div id="llm-form" class="llm-form" hidden>
+              <input id="llm-name" type="text" placeholder="配置名称，如 Kimi 主力" maxlength="40" />
+              <input id="llm-base-url" type="text" placeholder="连接地址，如 https://api.deepseek.com/v1" spellcheck="false" />
+              <input id="llm-model" type="text" placeholder="模型名称，如 deepseek-chat" spellcheck="false" />
+              <input id="llm-key" type="password" placeholder="API Key（编辑时留空则不修改）" autocomplete="off" />
+              <div class="llm-form-actions">
+                <button type="button" class="ghost-btn" id="llm-test-btn">测试连接</button>
+                <button type="button" class="mini-btn primary" id="llm-save-btn">保存</button>
+                <button type="button" class="ghost-btn" id="llm-cancel-btn">取消</button>
+              </div>
+            </div>
+            <p class="hint" id="llm-hint">OpenAI 兼容接口，地址填到 /v1 为止。配置保存在登录账户中，分镜拆解与 InkOS 可共用。</p>
+          </section>
+
+          <section class="field">
+            <label class="field-label" for="story-title">故事标题</label>
+            <input id="story-title" type="text" placeholder="给这个故事起个名" maxlength="60" />
+          </section>
+
+          <section class="field">
+            <label class="field-label" for="story-text">小说文本</label>
+            <div class="inkos-picker">
+              <div class="inkos-row">
+                <select id="inkos-book-select" aria-label="选择 InkOS 书目">
+                  <option value="">InkOS 书架加载中…</option>
+                </select>
+                <select id="inkos-chapter-select" aria-label="选择章节" disabled>
+                  <option value="">先选书</option>
+                </select>
+                <button type="button" class="ghost-btn" id="inkos-pull-btn" disabled>拉取</button>
+              </div>
+              <p class="hint inkos-hint" id="inkos-hint" hidden></p>
+            </div>
+            <textarea id="story-text" rows="8" placeholder="粘贴小说或故事全文（建议 12000 字以内），或从上方 InkOS 书架一键拉取章节"></textarea>
+            <div class="story-import-row">
+              <button type="button" class="ghost-btn" id="story-import-btn">导入 txt / md 文件</button>
+              <input type="file" id="story-file-input" accept=".txt,.md,.markdown" hidden />
+            </div>
+          </section>
+
+          <section class="field">
+            <label class="field-label" for="story-style">视觉风格</label>
+            <input id="story-style" type="text" placeholder="整片统一的视觉风格" />
+            <div class="chips" id="style-chips" role="group" aria-label="风格预设"></div>
+          </section>
+
+          <section class="field">
+            <label class="field-label" id="shotcount-label">镜头数量</label>
+            <div class="chips" id="shotcount-chips" role="group" aria-labelledby="shotcount-label"></div>
+          </section>
+
+          <section class="field">
+            <label class="field-label">画幅</label>
+            <div class="chips" role="group" aria-label="画幅">
+              <span class="chip active" aria-pressed="true">横屏 16:9</span>
+            </div>
+          </section>
+
+          <button type="button" class="btn-primary" id="story-analyze-btn">智能分镜</button>
+          <div class="error-box" id="story-error-box" role="alert" hidden></div>
+        </aside>
+
+        <section class="panel story-main" aria-label="分镜工作区">
+          <div class="story-head">
+            <h2>分镜工作区<span id="story-current-title"></span></h2>
+            <div class="story-head-actions">
+              <select id="story-project-select" aria-label="选择故事项目"></select>
+              <button type="button" class="ghost-btn" id="story-delete-btn">删除项目</button>
+            </div>
+          </div>
+
+          <div class="story-tabs" role="tablist" aria-label="分镜工作区步骤">
+            <button type="button" class="story-tab active" id="story-tab-characters" role="tab" aria-selected="true">① 角色三视图<span class="tab-badge" id="tab-badge-characters"></span></button>
+            <button type="button" class="story-tab" id="story-tab-scenes" role="tab" aria-selected="false">② 场景图<span class="tab-badge" id="tab-badge-scenes"></span></button>
+            <button type="button" class="story-tab" id="story-tab-shots" role="tab" aria-selected="false">③ 镜头视频<span class="tab-badge" id="tab-badge-shots"></span></button>
+          </div>
+
+          <div class="story-batch">
+            <button type="button" class="btn-primary" id="story-batch-image-btn">批量生成设定图</button>
+            <button type="button" class="btn-primary" id="story-batch-video-btn">批量生成视频</button>
+            <label class="check-row chain-row" for="story-chain" title="开启后：场景未变化的相邻镜头自动用上一段视频的尾帧作为下一段的首帧衔接；场景切换的镜头自动改用角色三视图 + 场景图参考生成">
+              <input type="checkbox" id="story-chain" />
+              <span>尾帧衔接</span>
+            </label>
+            <span class="story-progress" id="story-progress"></span>
+          </div>
+
+          <div class="story-keys">
+            <div class="story-key-item">
+              <label for="story-sensenova-key">图片 Key（商汤）</label>
+              <select id="story-sensenova-key-select" aria-label="选择商汤密钥"></select>
+              <input id="story-sensenova-key" type="password" placeholder="粘贴商汤 API Key" autocomplete="off" spellcheck="false" hidden />
+            </div>
+            <div class="story-key-item">
+              <label for="story-agnes-key">视频 Key（Agnes）</label>
+              <select id="story-agnes-key-select" aria-label="选择 Agnes 密钥"></select>
+              <input id="story-agnes-key" type="password" placeholder="粘贴 Agnes API Key" autocomplete="off" spellcheck="false" hidden />
+            </div>
+          </div>
+
+          <div class="tab-pane" id="pane-characters">
+            <div class="asset-grid" id="char-grid"></div>
+            <div class="empty-state" id="char-empty" hidden>
+              <p>还没有角色卡</p>
+              <span>在左侧粘贴小说并点击「智能分镜」，这里会列出提取到的角色</span>
+            </div>
+          </div>
+
+          <div class="tab-pane" id="pane-scenes" hidden>
+            <div class="asset-grid" id="scene-grid"></div>
+            <div class="empty-state" id="scene-empty" hidden>
+              <p>还没有场景卡</p>
+              <span>分镜后这里会列出小说中的主要场景</span>
+            </div>
+          </div>
+
+          <div class="tab-pane" id="pane-shots" hidden>
+            <div class="shot-list" id="shot-list"></div>
+            <div class="empty-state" id="story-empty">
+              <p>还没有分镜</p>
+              <span>在左侧粘贴小说文本，点击「智能分镜」开始改编</span>
+            </div>
+          </div>
+        </section>
+      </main>
+  </div>
+
+  <!-- 登录 / 注册弹窗 -->
+  <div class="modal-mask" id="auth-modal" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="auth-title">
+      <div class="modal-head">
+        <h3 id="auth-title">账户登录</h3>
+        <button type="button" class="modal-close" id="auth-close" aria-label="关闭">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div class="tab-row" role="tablist" aria-label="登录或注册">
+        <button type="button" class="tab active" id="tab-login" role="tab" aria-selected="true">登录</button>
+        <button type="button" class="tab" id="tab-register" role="tab" aria-selected="false">注册新账户</button>
+      </div>
+      <form id="auth-form" novalidate>
+        <div class="form-row">
+          <label for="auth-username">用户名</label>
+          <input id="auth-username" type="text" autocomplete="username" placeholder="2-24 位字母 / 数字 / 下划线 / 中文" />
+        </div>
+        <div class="form-row">
+          <label for="auth-password">密码</label>
+          <input id="auth-password" type="password" autocomplete="current-password" placeholder="至少 6 位" />
+        </div>
+        <div class="error-box" id="auth-error" role="alert" hidden></div>
+        <button type="submit" class="btn-primary" id="auth-submit">登录</button>
+        <p class="hint" id="auth-hint">登录后自动填充你保存的 API Key，并可在多把密钥间切换</p>
+      </form>
+    </div>
+  </div>
+
+  <!-- 密钥管理弹窗 -->
+  <div class="modal-mask" id="keys-modal" hidden>
+    <div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="keys-title">
+      <div class="modal-head">
+        <h3 id="keys-title">密钥管理</h3>
+        <button type="button" class="modal-close" id="keys-close" aria-label="关闭">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div class="key-list" id="key-list"></div>
+      <form class="add-key-form" id="add-key-form" novalidate>
+        <h4>添加密钥</h4>
+        <div class="add-key-grid">
+          <select id="new-key-provider" aria-label="服务商"></select>
+          <input id="new-key-name" type="text" placeholder="备注名（可选）" maxlength="40" />
+          <input id="new-key-value" type="password" placeholder="粘贴 API Key" autocomplete="off" spellcheck="false" class="span-2" />
+        </div>
+        <div class="error-box" id="key-error" role="alert" hidden></div>
+        <button type="submit" class="btn-secondary">保存密钥</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- 图片选择弹窗（用于视频参考图 / 首尾帧） -->
+  <div class="modal-mask" id="picker-modal" hidden>
+    <div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="picker-title">
+      <div class="modal-head">
+        <h3 id="picker-title">从生成结果选择图片</h3>
+        <button type="button" class="modal-close" id="picker-close" aria-label="关闭">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div class="tab-row" role="tablist" aria-label="选择类型">
+        <button type="button" class="tab active" id="picker-tab-image" aria-selected="true">生成图片</button>
+        <button type="button" class="tab" id="picker-tab-video" aria-selected="false">视频尾帧</button>
+      </div>
+      <div class="picker-grid" id="picker-grid"></div>
+    </div>
+  </div>
+
+  <div class="lightbox" id="lightbox" hidden>
+    <img id="lightbox-img" alt="预览大图" />
+  </div>
+  <div class="toast" id="toast" role="status" hidden></div>
+
+  <script src="app.js"></script>
+  <script src="story.js"></script>
+</body>
+</html>

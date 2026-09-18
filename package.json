@@ -1,0 +1,16 @@
+{
+  "name": "ai-image-studio",
+  "version": "1.0.0",
+  "private": true,
+  "description": "AI 影像工作台：商汤 SenseNova / Agnes 文生图、图生视频、小说分镜三步出片、成片合成",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  }
+}
