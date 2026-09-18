@@ -1316,6 +1316,15 @@ select { cursor: pointer; }
   white-space: nowrap;
 }
 
+/* ===== 提示词模板下拉 ===== */
+.tpl-row { margin-bottom: var(--space-2); }
+
+.tpl-row select {
+  width: 100%;
+  font-size: 12.5px;
+  padding: 7px 8px;
+}
+
 /* ===== 滚动条 ===== */
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.12); border-radius: 8px; }

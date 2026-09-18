@@ -8,12 +8,30 @@
 const STORY_LS_KEY = 'ai-image-studio-story-v1';
 
 const STORY_STYLES = [
-  '吉卜力动画风，柔和光影',
-  '写实电影感，电影级打光',
-  '日漫风格，鲜明线条',
-  '国风水墨，留白意境',
-  '赛博朋克，霓虹灯效',
-  '3D 卡通渲染，皮克斯质感',
+  {
+    name: '吉卜力动画',
+    prompt: '吉卜力工作室风格手绘动画：细腻水彩背景，赛璐璐平涂上色，柔和自然光带暖色滤镜，温暖怀旧色调，笔触温润干净',
+  },
+  {
+    name: '写实电影感',
+    prompt: '写实电影质感：35mm 胶片颗粒，电影级三点打光与冷暖对比光影，浅景深，细腻色调分级，真实材质纹理',
+  },
+  {
+    name: '日漫风',
+    prompt: '日式动漫风格：清晰利落的线条，鲜明平涂色块，眼神光点缀，情感化表情演绎，背景精细度高于人物',
+  },
+  {
+    name: '国风水墨',
+    prompt: '中国水墨画风格：留白构图，墨色浓淡晕染，淡彩点缀，宣纸质感，笔触写意而有骨',
+  },
+  {
+    name: '赛博朋克',
+    prompt: '赛博朋克风格：粉紫与青蓝霓虹光源，湿润路面反射，体积光雾，高反差暗部，机能面料材质细节',
+  },
+  {
+    name: '3D 皮克斯',
+    prompt: '皮克斯风格 3D 渲染：柔和全局光照，次表面散射皮肤，适度夸张的造型比例，细腻材质贴图，明快饱和配色',
+  },
 ];
 
 const STORY_SHOT_COUNTS = [8, 12, 16, 20, 24];
@@ -986,10 +1004,15 @@ async function generateCharacterView(ci, btn) {
   renderCharacters();
   try {
     const style = story.style || '电影感插画风格';
-    const prompt =
-      `${style}，角色三视图设定图：同一个角色的三个视角横向并排——正面全身、侧面全身、背面全身，` +
-      `站立姿势，纯浅灰色背景，画面中只有这一个角色；角色「${c.name}」：${c.appearance}；` +
-      `三个视角的五官、发型、服装、配饰必须完全一致，全身完整可见`;
+    const prompt = [
+      `${style}`,
+      `角色三视图设定图：同一角色的三个视角横向等距并排——正面全身、侧面全身、背面全身，自然站立姿势，全身完整可见，三个视角大小一致`,
+      `角色「${c.name}」：${c.appearance}`,
+      `版式与背景：纯浅灰色无缝背景，画面中只有这一个角色，无任何文字标注`,
+      `光照与质感：柔和均匀的棚拍光，无强烈投影；线条清晰，布料纹理与发丝层次细节丰富`,
+      `一致性约束（最高优先）：三个视角的五官、发型、服装、配饰完全一致`,
+      `负面约束：不要多余角色，不要复杂背景，不要文字水印，不要改变角色特征`,
+    ].join('。');
     const resp = await fetch('/api/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1041,9 +1064,14 @@ async function generateSceneImage(si, btn) {
   renderScenes();
   try {
     const style = story.style || '电影感插画风格';
-    const prompt =
-      `${style}，场景设定图：${s.description}；画面中不出现任何人物，纯环境描绘，` +
-      `注重空间布局、光线氛围与细节质感`;
+    const prompt = [
+      `${style}`,
+      `场景设定图：${s.description}`,
+      `镜头语言：广角建立镜头，前景、中景、远景层次分明，空间纵深强`,
+      `光照与氛围：光线方向明确，冷暖层次细腻，氛围沉浸`,
+      `质感与细节：材质纹理具体（按场景对应石材/织物/金属/植被），微观细节点缀，主体清晰`,
+      `负面约束：画面中不出现任何人物，不要文字水印，不要模糊`,
+    ].join('。');
     const resp = await fetch('/api/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1496,7 +1524,7 @@ function handleStoryFile(file) {
 /* ---------------- 初始化 ---------------- */
 
 function renderStoryChips() {
-  renderChips($('#style-chips'), STORY_STYLES.map((v) => ({ label: v.split('，')[0], value: v })), storyState.style, (v) => {
+  renderChips($('#style-chips'), STORY_STYLES.map((v) => ({ label: v.name, value: v.prompt })), storyState.style, (v) => {
     storyState.style = v;
     $('#story-style').value = v;
     renderStoryChips();
