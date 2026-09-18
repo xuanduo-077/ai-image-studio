@@ -35,6 +35,13 @@
     <main class="layout" id="ws-image" hidden>
       <!-- 左侧：设置面板 -->
       <aside class="panel settings-panel" aria-label="生成设置">
+        <div class="script-row">
+          <span class="script-label">剧本</span>
+          <select id="image-script-select" aria-label="当前剧本"></select>
+          <button type="button" class="slot-btn" id="image-script-add" title="新建剧本">＋</button>
+          <button type="button" class="slot-btn" id="image-script-rename" title="重命名当前剧本">改</button>
+          <button type="button" class="slot-btn" id="image-script-del" title="删除当前剧本">删</button>
+        </div>
         <section class="field">
           <label class="field-label" id="provider-label">模型服务商</label>
           <div class="provider-grid" id="provider-grid" role="group" aria-labelledby="provider-label">
@@ -130,6 +137,14 @@
         <div class="video-head">
           <h2>视频生成</h2>
           <p class="video-sub">Agnes · agnes-video-2.5-flash</p>
+        </div>
+
+        <div class="script-row">
+          <span class="script-label">剧本</span>
+          <select id="video-script-select" aria-label="当前剧本"></select>
+          <button type="button" class="slot-btn" id="video-script-add" title="新建剧本">＋</button>
+          <button type="button" class="slot-btn" id="video-script-rename" title="重命名当前剧本">改</button>
+          <button type="button" class="slot-btn" id="video-script-del" title="删除当前剧本">删</button>
         </div>
 
         <section class="field">

@@ -1324,6 +1324,37 @@ select { cursor: pointer; }
   background: #0d0f14;
 }
 
+/* ===== 剧本切换器 ===== */
+.script-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: var(--space-3);
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.script-label {
+  font-size: 12px;
+  color: var(--text-3);
+  flex-shrink: 0;
+}
+
+.script-row select {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  padding: 6px 8px;
+}
+
+.script-row .slot-btn {
+  padding: 4px 8px;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
 /* ===== 提示词模板下拉 ===== */
 .tpl-row { margin-bottom: var(--space-2); }
 

@@ -522,6 +522,7 @@ async function analyzeStory() {
         scenes: data.scenes,
         shots: data.shots,
         sourceText: text.slice(0, 100000),
+        scriptId: activeScriptId(),
       }),
     });
     const created = await create.json().catch(() => ({}));
@@ -1297,6 +1298,7 @@ async function generateShotVideo(shot, i, btn) {
       seconds: String(shot.duration || 4),
       size: '720P',
       meta: story ? { storyId: story.id, shotIndex: i } : null,
+      scriptId: (story && story.scriptId) || activeScriptId(),
       ...frames,
     };
     const resp = await fetch('/api/video', {

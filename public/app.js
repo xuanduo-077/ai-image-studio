@@ -61,6 +61,8 @@ const state = {
   vseconds: '5',
   vsize: '720P',
   vratio: '16:9',
+  scripts: [],
+  activeScriptId: 'script-default',
 };
 
 const auth = {
@@ -310,6 +312,153 @@ async function refreshAuth() {
   renderSavedKeySelect();
   renderVideoKeySelect();
   document.dispatchEvent(new CustomEvent('auth-changed'));
+}
+
+/* ---------------- 剧本体系 ---------------- */
+
+function activeScriptId() {
+  return state.activeScriptId || 'script-default';
+}
+
+function renderScriptSelects() {
+  ['image', 'video'].forEach((p) => {
+    const sel = $(`#${p}-script-select`);
+    if (!sel) return;
+    sel.innerHTML = '';
+    if (!auth.user || !state.scripts.length) {
+      const opt = document.createElement('option');
+      opt.value = activeScriptId();
+      opt.textContent = auth.user ? '默认剧本' : '登录后可用剧本';
+      sel.appendChild(opt);
+      sel.disabled = !auth.user;
+    } else {
+      sel.disabled = false;
+      state.scripts.forEach((s) => {
+        const opt = document.createElement('option');
+        opt.value = s.id;
+        opt.textContent = s.name;
+        sel.appendChild(opt);
+      });
+      sel.value = activeScriptId();
+    }
+    const dis = !auth.user;
+    const add = $(`#${p}-script-add`);
+    const ren = $(`#${p}-script-rename`);
+    const del = $(`#${p}-script-del`);
+    if (add) add.disabled = dis;
+    if (ren) ren.disabled = dis;
+    if (del) del.disabled = dis;
+  });
+  renderGallery();
+  renderVideoGallery();
+}
+
+async function loadScripts() {
+  if (!auth.user) {
+    state.scripts = [];
+    state.activeScriptId = 'script-default';
+    renderScriptSelects();
+    return;
+  }
+  try {
+    const resp = await fetch('/api/scripts', { headers: authHeaders() });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+    state.scripts = Array.isArray(data.scripts) ? data.scripts : [];
+    state.activeScriptId = data.activeScriptId || 'script-default';
+    localStorage.setItem('ai-image-studio-script', state.activeScriptId);
+  } catch {
+    /* 拉取失败保持现状 */
+  }
+  renderScriptSelects();
+}
+
+async function activateScript(id) {
+  if (!id) return;
+  try {
+    const resp = await fetch(`/api/scripts/${encodeURIComponent(id)}/activate`, {
+      method: 'POST',
+      headers: authHeaders(),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.error || '切换失败');
+    state.activeScriptId = data.activeScriptId || id;
+    localStorage.setItem('ai-image-studio-script', state.activeScriptId);
+    renderScriptSelects();
+    const cur = state.scripts.find((s) => s.id === state.activeScriptId);
+    showToast(`已切换剧本：${cur ? cur.name : ''}`);
+  } catch (err) {
+    showToast(err.message || '切换失败');
+    renderScriptSelects();
+  }
+}
+
+async function createScript() {
+  const name = prompt('新剧本名称（如：断开的莫比乌斯·第1章）');
+  if (!name || !name.trim()) return;
+  try {
+    const resp = await fetch('/api/scripts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ name: name.trim() }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.error || '创建失败');
+    state.scripts = data.scripts;
+    state.activeScriptId = data.activeScriptId;
+    localStorage.setItem('ai-image-studio-script', state.activeScriptId);
+    renderScriptSelects();
+    showToast(`剧本「${data.script.name}」已创建并切换`);
+  } catch (err) {
+    showToast(err.message || '创建失败');
+  }
+}
+
+async function renameScript() {
+  const cur = state.scripts.find((s) => s.id === activeScriptId());
+  if (!cur) return;
+  const name = prompt('修改剧本名称', cur.name);
+  if (!name || !name.trim() || name.trim() === cur.name) return;
+  try {
+    const resp = await fetch(`/api/scripts/${encodeURIComponent(cur.id)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ name: name.trim() }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.error || '重命名失败');
+    state.scripts = data.scripts;
+    renderScriptSelects();
+    showToast('剧本已重命名');
+  } catch (err) {
+    showToast(err.message || '重命名失败');
+  }
+}
+
+async function deleteScript() {
+  const cur = state.scripts.find((s) => s.id === activeScriptId());
+  if (!cur) return;
+  if (cur.id === 'script-default') {
+    showToast('默认剧本不能删除');
+    return;
+  }
+  if (!confirm(`删除剧本「${cur.name}」？该剧本下的图片和视频将归入默认剧本，文件不会被删除。`)) return;
+  try {
+    const resp = await fetch(`/api/scripts/${encodeURIComponent(cur.id)}`, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.error || '删除失败');
+    state.scripts = data.scripts;
+    state.activeScriptId = data.activeScriptId;
+    localStorage.setItem('ai-image-studio-script', state.activeScriptId);
+    renderScriptSelects();
+    loadHistory();
+    showToast('剧本已删除');
+  } catch (err) {
+    showToast(err.message || '删除失败');
+  }
 }
 
 async function loadKeys() {
@@ -1142,9 +1291,10 @@ function buildVideoCard(item) {
 function renderVideoGallery() {
   const list = $('#video-list');
   list.innerHTML = '';
-  video.results.forEach((item) => list.appendChild(buildVideoCard(item)));
-  $('#video-empty').hidden = video.results.length > 0;
-  $('#video-result-count').textContent = video.results.length ? `（${video.results.length}）` : '';
+  const visible = video.results.filter((item) => (item.scriptId || 'script-default') === activeScriptId());
+  visible.forEach((item) => list.appendChild(buildVideoCard(item)));
+  $('#video-empty').hidden = visible.length > 0;
+  $('#video-result-count').textContent = visible.length ? `（${visible.length}）` : '';
 }
 
 function downloadVideo(item) {
@@ -1355,7 +1505,7 @@ async function startRender() {
     const resp = await fetch('/api/render', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ items: renderState.selectedIds, hd: renderState.hd }),
+      body: JSON.stringify({ items: renderState.selectedIds, hd: renderState.hd, scriptId: activeScriptId() }),
     });
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok) throw new Error(data.error || `请求失败（HTTP ${resp.status}）`);
@@ -1540,9 +1690,10 @@ function renderGallery() {
     }
   }
 
-  results.forEach((item) => grid.appendChild(buildCard(item)));
-  $('#empty-state').hidden = results.length > 0 || generating;
-  $('#result-count').textContent = results.length ? `（${results.length}）` : '';
+  const visible = results.filter((item) => (item.scriptId || 'script-default') === activeScriptId());
+  visible.forEach((item) => grid.appendChild(buildCard(item)));
+  $('#empty-state').hidden = visible.length > 0 || generating;
+  $('#result-count').textContent = visible.length ? `（${visible.length}）` : '';
 }
 
 /* ---------------- 下载与预览 ---------------- */
@@ -1818,6 +1969,21 @@ function init() {
       closeKeysModal();
       closePicker();
     }
+  });
+
+  // 剧本切换器
+  ['image', 'video'].forEach((p) => {
+    const sel = $(`#${p}-script-select`);
+    if (sel) sel.addEventListener('change', (e) => activateScript(e.target.value));
+    const add = $(`#${p}-script-add`);
+    if (add) add.addEventListener('click', createScript);
+    const ren = $(`#${p}-script-rename`);
+    if (ren) ren.addEventListener('click', renameScript);
+    const del = $(`#${p}-script-del`);
+    if (del) del.addEventListener('click', deleteScript);
+  });
+  document.addEventListener('auth-changed', () => {
+    loadScripts();
   });
 
   // 初始渲染

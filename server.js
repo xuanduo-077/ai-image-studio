@@ -115,8 +115,27 @@ function requireAuth(req, res, next) {
   const token = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
   const user = getUserByToken(token);
   if (!user) return res.status(401).json({ error: '未登录或登录已过期' });
-  req.user = user;
+  req.user = ensureScripts(user);
   next();
+}
+
+/** 确保用户拥有剧本列表（首次自动创建默认剧本）与有效激活剧本 */
+function ensureScripts(user) {
+  let changed = false;
+  if (!Array.isArray(user.scripts) || !user.scripts.length) {
+    user.scripts = [{ id: 'script-default', name: '默认剧本', createdAt: Date.now() }];
+    changed = true;
+  }
+  if (!user.scripts.some((s) => s.id === user.activeScriptId)) {
+    user.activeScriptId = user.scripts[0].id;
+    changed = true;
+  }
+  if (changed) persistDb();
+  return user;
+}
+
+function normalizeScriptId(id) {
+  return typeof id === 'string' && id ? id.slice(0, 64) : null;
 }
 
 loadDb();
@@ -413,7 +432,7 @@ async function runRenderJob(rec, files) {
 }
 
 app.post('/api/render', (req, res) => {
-  const { items, hd, title } = req.body || {};
+  const { items, hd, title, scriptId } = req.body || {};
   if (!Array.isArray(items) || items.length < 2) {
     return res.status(400).json({ error: '请至少选择 2 段视频' });
   }
@@ -429,6 +448,7 @@ app.post('/api/render', (req, res) => {
     id: `render-${crypto.randomUUID()}`,
     type: 'render',
     title: (typeof title === 'string' && title.trim().slice(0, 60)) || `成片 ${new Date(now).toLocaleString('zh-CN', { hour12: false }).slice(5, 16)}`,
+    scriptId: normalizeScriptId(scriptId),
     segments: files.length,
     hd: hd !== false,
     status: 'rendering',
@@ -594,7 +614,7 @@ async function callImageApi(provider, apiKey, payload) {
 }
 
 app.post('/api/generate', async (req, res) => {
-  const { provider, apiKey, prompt, size, ratio, n, watermark, model, referenceImages } = req.body || {};
+  const { provider, apiKey, prompt, size, ratio, n, watermark, model, referenceImages, scriptId } = req.body || {};
   const conf = PROVIDERS[provider];
   if (!conf) {
     return res.status(400).json({ error: '不支持的服务商，请选择 商汤 SenseNova 或 Agnes' });
@@ -680,6 +700,7 @@ app.post('/api/generate', async (req, res) => {
         file: null,
         url: img.url || null,
         b64: null,
+        scriptId: normalizeScriptId(scriptId),
         createdAt: now,
       };
       const baseName = `img-${provider}-${now}-${i}`;
@@ -884,7 +905,7 @@ async function callVideoApi(apiKey, payload) {
 }
 
 app.post('/api/video', async (req, res) => {
-  const { apiKey, prompt, mode, seconds, size, aspectRatio, firstFrame, lastFrame, images, meta } = req.body || {};
+  const { apiKey, prompt, mode, seconds, size, aspectRatio, firstFrame, lastFrame, images, meta, scriptId } = req.body || {};
   if (!apiKey || typeof apiKey !== 'string' || !apiKey.trim()) {
     return res.status(400).json({ error: '请先填写 Agnes API Key' });
   }
@@ -926,6 +947,7 @@ app.post('/api/video', async (req, res) => {
     size: sz,
     ratio: ratioOut,
     prompt: promptText,
+    scriptId: normalizeScriptId(scriptId),
     status: 'submitting',
     taskId: null,
     file: null,
@@ -1232,6 +1254,63 @@ app.post('/api/llm-configs/:id/test', requireAuth, async (req, res) => {
   } catch (err) {
     res.status(502).json({ ok: false, error: (err && err.message) || '连接失败' });
   }
+});
+
+/* ================= 剧本（脚本项目）接口 ================= */
+
+app.get('/api/scripts', requireAuth, (req, res) => {
+  res.json({ scripts: req.user.scripts, activeScriptId: req.user.activeScriptId });
+});
+
+app.post('/api/scripts', requireAuth, (req, res) => {
+  const name = String((req.body && req.body.name) || '').trim().slice(0, 40);
+  if (!name) return res.status(400).json({ error: '请填写剧本名称' });
+  if (req.user.scripts.some((s) => s.name === name)) {
+    return res.status(400).json({ error: '剧本名称已存在' });
+  }
+  const item = { id: `script-${crypto.randomUUID()}`, name, createdAt: Date.now() };
+  req.user.scripts.push(item);
+  req.user.activeScriptId = item.id;
+  persistDb();
+  res.json({ script: item, scripts: req.user.scripts, activeScriptId: req.user.activeScriptId });
+});
+
+app.put('/api/scripts/:id', requireAuth, (req, res) => {
+  const item = req.user.scripts.find((s) => s.id === req.params.id);
+  if (!item) return res.status(404).json({ error: '剧本不存在' });
+  const name = String((req.body && req.body.name) || '').trim().slice(0, 40);
+  if (!name) return res.status(400).json({ error: '请填写剧本名称' });
+  if (req.user.scripts.some((s) => s.id !== item.id && s.name === name)) {
+    return res.status(400).json({ error: '剧本名称已存在' });
+  }
+  item.name = name;
+  persistDb();
+  res.json({ script: item, scripts: req.user.scripts, activeScriptId: req.user.activeScriptId });
+});
+
+app.delete('/api/scripts/:id', requireAuth, (req, res) => {
+  if (req.params.id === 'script-default') {
+    return res.status(400).json({ error: '默认剧本不能删除' });
+  }
+  const idx = req.user.scripts.findIndex((s) => s.id === req.params.id);
+  if (idx === -1) return res.status(404).json({ error: '剧本不存在' });
+  req.user.scripts.splice(idx, 1);
+  // 该剧本下的历史记录归入默认剧本（文件不删除）
+  history.forEach((r) => {
+    if (r.scriptId === req.params.id) r.scriptId = 'script-default';
+  });
+  persistHistory();
+  if (req.user.activeScriptId === req.params.id) req.user.activeScriptId = 'script-default';
+  persistDb();
+  res.json({ ok: true, scripts: req.user.scripts, activeScriptId: req.user.activeScriptId });
+});
+
+app.post('/api/scripts/:id/activate', requireAuth, (req, res) => {
+  const item = req.user.scripts.find((s) => s.id === req.params.id);
+  if (!item) return res.status(404).json({ error: '剧本不存在' });
+  req.user.activeScriptId = item.id;
+  persistDb();
+  res.json({ ok: true, activeScriptId: item.id });
 });
 
 /* ================= InkOS 对接代理 ================= */
@@ -1548,12 +1627,14 @@ app.get('/api/story/:id', requireAuth, (req, res) => {
 });
 
 app.post('/api/story', requireAuth, (req, res) => {
-  const { title, style, characters, scenes, shots, sourceText } = req.body || {};
+  const { title, style, characters, scenes, shots, sourceText, scriptId } = req.body || {};
   if (!Array.isArray(shots) || !shots.length) return res.status(400).json({ error: '分镜数据为空' });
+  ensureScripts(req.user);
   const now = Date.now();
   const story = {
     id: `story-${crypto.randomUUID()}`,
     userId: req.user.username,
+    scriptId: normalizeScriptId(scriptId) || req.user.activeScriptId,
     title: (typeof title === 'string' && title.trim().slice(0, 60)) || '未命名故事',
     style: (typeof style === 'string' && style.trim().slice(0, 80)) || '',
     aspect: '16:9',
