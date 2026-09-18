@@ -249,18 +249,8 @@ function loadHistory() {
 
 function persistHistory() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-  if (history.length > 200) {
-    const removed = history.splice(200);
-    removed.forEach((r) => {
-      if (r.file) {
-        try {
-          fs.unlinkSync(path.join(__dirname, r.file));
-        } catch {
-          /* 文件可能已不存在 */
-        }
-      }
-    });
-  }
+  // 不再设数量上限、不再自动删除旧记录与文件——历史只增不减，
+  // 由用户通过「清空」按钮（/api/history/clear）主动清理
   const tmp = `${HISTORY_FILE}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify({ items: history }, null, 2));
   fs.renameSync(tmp, HISTORY_FILE);
@@ -497,7 +487,8 @@ function saveDataFromB64(b64, baseName) {
 }
 
 app.get('/api/history', (req, res) => {
-  res.json({ items: history.slice(0, 200) });
+  // 完整历史保留在 history.json；接口返回最近 500 条供界面展示
+  res.json({ items: history.slice(0, 500) });
 });
 
 app.post('/api/history/clear', (req, res) => {
@@ -1329,10 +1320,44 @@ app.get('/api/inkos/books/:id/characters', requireAuth, async (req, res) => {
   }
 });
 
+/** 组装文本模型候选列表：优先指定/激活的配置，其余配置按轮询次序作为故障转移备份 */
+let llmRotateCounter = 0;
+function pickLlmCandidates(user, requestedId) {
+  const all = (Array.isArray(user.llmConfigs) ? user.llmConfigs : []).filter(
+    (c) => c && c.baseUrl && c.model && c.key
+  );
+  if (!all.length) return [];
+  const primary = all.find((c) => c.id === requestedId) || all.find((c) => c.id === user.activeLlmId) || null;
+  const rest = all.filter((c) => c !== primary);
+  llmRotateCounter += 1;
+  const k = rest.length ? llmRotateCounter % rest.length : 0;
+  const rotatedRest = rest.slice(k).concat(rest.slice(0, k));
+  return primary ? [primary, ...rotatedRest] : rotatedRest;
+}
+
+/** 单阶段 LLM 调用：同一配置重试一次，仍失败则自动切换下一个配置 */
+async function runLlmStage(candidates, buildRequest, validateResult, stageLabel) {
+  let lastErr = null;
+  for (const cfg of candidates) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const { messages, opts } = buildRequest(cfg);
+        const raw = await callChatLlm(cfg, messages, opts);
+        return { result: validateResult(raw), cfg };
+      } catch (e) {
+        lastErr = e;
+      }
+    }
+  }
+  throw new Error(
+    `${stageLabel}失败：${(lastErr && lastErr.message) || '所有文本模型配置均不可用'}（已尝试 ${candidates.length} 个配置）`
+  );
+}
+
 app.post('/api/story/analyze', requireAuth, async (req, res) => {
   const { text, style, shotCount, llmConfigId, canon } = req.body || {};
-  const cfg = (req.user.llmConfigs || []).find((c) => c.id === llmConfigId) || (req.user.llmConfigs || []).find((c) => c.id === req.user.activeLlmId);
-  if (!cfg) return res.status(400).json({ error: '请先添加并选择一个文本模型配置' });
+  const candidates = pickLlmCandidates(req.user, llmConfigId);
+  if (!candidates.length) return res.status(400).json({ error: '请先添加并选择一个文本模型配置' });
   const storyText = typeof text === 'string' ? text.trim() : '';
   if (!storyText) return res.status(400).json({ error: '请先粘贴小说文本' });
   const canonText = typeof canon === 'string' ? canon.trim().slice(0, 6000) : '';
@@ -1345,39 +1370,49 @@ app.post('/api/story/analyze', requireAuth, async (req, res) => {
   count = Math.min(Math.max(count, 4), 24);
 
   try {
-    let card = null;
-    for (let attempt = 0; attempt < 2 && !card; attempt++) {
-      const raw = await callChatLlm(cfg, [
-        { role: 'system', content: STORY_CHAR_SYSTEM },
-        {
-          role: 'user',
-          content: canonText
-            ? `小说文本：\n${storyText}\n\n角色设定参考（InkOS 角色矩阵，提取人物时以此为准）：\n${canonText}`
-            : `小说文本：\n${storyText}`,
-        },
-      ], { temperature: 0.5 });
-      try {
-        card = validateCard(parseJsonLoose(raw));
+    const cardStage = await runLlmStage(
+      candidates,
+      () => ({
+        messages: [
+          { role: 'system', content: STORY_CHAR_SYSTEM },
+          {
+            role: 'user',
+            content: canonText
+              ? `小说文本：\n${storyText}\n\n角色设定参考（InkOS 角色矩阵，提取人物时以此为准）：\n${canonText}`
+              : `小说文本：\n${storyText}`,
+          },
+        ],
+        opts: { temperature: 0.5 },
+      }),
+      (raw) => {
+        const card = validateCard(parseJsonLoose(raw));
         if (!card.characters.length) throw new Error('未能从文本中提取到角色信息');
-      } catch (e) {
-        if (attempt === 1) throw new Error(`角色提取失败：${e.message}`);
-      }
-    }
+        return card;
+      },
+      '角色提取'
+    );
+    const card = cardStage.result;
 
-    let shots = null;
-    for (let attempt = 0; attempt < 2 && !shots; attempt++) {
-      const raw = await callChatLlm(cfg, [
-        { role: 'system', content: buildStoryboardSystem(styleText, card.characters, card.scenes, count) },
-        { role: 'user', content: `小说文本：\n${storyText}` },
-      ], { temperature: 0.7 });
-      try {
-        shots = validateShots(parseJsonLoose(raw), count);
-      } catch (e) {
-        if (attempt === 1) throw new Error(`分镜生成失败：${e.message}`);
-      }
-    }
+    const shotsStage = await runLlmStage(
+      candidates,
+      () => ({
+        messages: [
+          { role: 'system', content: buildStoryboardSystem(styleText, card.characters, card.scenes, count) },
+          { role: 'user', content: `小说文本：\n${storyText}` },
+        ],
+        opts: { temperature: 0.7 },
+      }),
+      (raw) => validateShots(parseJsonLoose(raw), count),
+      '分镜生成'
+    );
 
-    res.json({ characters: card.characters, scenes: card.scenes, shots, style: styleText });
+    res.json({
+      characters: card.characters,
+      scenes: card.scenes,
+      shots: shotsStage.result,
+      style: styleText,
+      usedLlm: cardStage.cfg.name || cardStage.cfg.model,
+    });
   } catch (err) {
     res.status(502).json({ error: (err && err.message) || '分镜分析失败' });
   }

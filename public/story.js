@@ -515,8 +515,9 @@ async function analyzeStory() {
     renderStoryAll();
     switchStoryTab('characters');
     loadProjects();
+    const usedLlm = data.usedLlm ? `（文本模型：${data.usedLlm}）` : '';
     showToast(
-      `分镜完成：${created.story.characters.length} 个角色、${created.story.scenes.length} 个场景、${created.story.shots.length} 个镜头。请先在①②生成设定图，再到③制作视频`
+      `分镜完成${usedLlm}：${created.story.characters.length} 个角色、${created.story.scenes.length} 个场景、${created.story.shots.length} 个镜头。请先在①②生成设定图，再到③制作视频`
     );
   } catch (err) {
     showStoryError(err.message || '分镜分析失败');
