@@ -1,8 +1,18 @@
 # AI 影像工作台 (AI Image Studio)
 
+简体中文 | [English](README.en.md)
+
 一个自托管的 AI 影像创作工作台：文生图、图生视频、小说分镜三步出片、成片合成，全部跑在你自己的机器上。API Key 由使用者自行填写，服务端不内置任何密钥。
 
 ![Node](https://img.shields.io/badge/node-%3E%3D18-brightgreen) ![License](https://img.shields.io/badge/license-MIT-blue)
+
+## 界面预览
+
+| 故事工坊 | 图片工作台 |
+|---|---|
+| ![故事工坊](docs/screenshots/story.png) | ![图片工作台](docs/screenshots/image.png) |
+| **视频工作台** | **账号与模型管理** |
+| ![视频工作台](docs/screenshots/video.png) | ![账号与模型管理](docs/screenshots/account.png) |
 
 ## 功能
 

@@ -41,7 +41,7 @@ const storyState = {
   projects: [],
   currentId: null,
   current: null,
-  style: STORY_STYLES[0],
+  style: STORY_STYLES[0].prompt,
   shotCount: 12,
   chain: true,
   batchRunning: false,
