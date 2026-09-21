@@ -140,6 +140,27 @@ function normalizeScriptId(id) {
 
 loadDb();
 
+/** 加载可选运行时配置 data/config.json（键名为环境变量名，不覆盖已设置的 env）。
+ *  适合不方便设置容器环境变量的部署：{"OPTIMIZER_URL":"http://192.168.x.x:28081"} */
+function loadRuntimeConfig() {
+  try {
+    const file = path.join(DATA_DIR, 'config.json');
+    if (!fs.existsSync(file)) return;
+    const cfg = JSON.parse(fs.readFileSync(file, 'utf8'));
+    let applied = 0;
+    for (const [k, v] of Object.entries(cfg)) {
+      if (typeof v === 'string' && v && process.env[k] == null) {
+        process.env[k] = v;
+        applied += 1;
+      }
+    }
+    if (applied) console.log(`[config] 已从 data/config.json 应用 ${applied} 项配置`);
+  } catch {
+    /* 配置文件缺失或损坏时忽略 */
+  }
+}
+loadRuntimeConfig();
+
 /* ================= 认证接口 ================= */
 
 app.post('/api/auth/register', (req, res) => {
@@ -506,10 +527,34 @@ function saveDataFromB64(b64, baseName) {
   return `/files/${name}`;
 }
 
+/** 重命名图片记录（供结果分类展示与视频选图时辨认） */
+app.post('/api/history/rename', (req, res) => {
+  const { id, name } = req.body || {};
+  const rec = history.find((r) => r.id === String(id || ''));
+  if (!rec || rec.type !== 'image') return res.status(404).json({ error: '记录不存在' });
+  const clean = typeof name === 'string' ? name.trim().slice(0, 30) : '';
+  rec.name = clean || null;
+  persistHistory();
+  res.json({ ok: true, record: rec });
+});
+
 app.get('/api/history', (req, res) => {
   // 完整历史保留在 history.json；接口返回最近 500 条供界面展示
   res.json({ items: history.slice(0, 500) });
 });
+
+/** 安全删除记录关联的本地文件（/files/ 下，防路径逃逸） */
+function unlinkRecordFiles(rec) {
+  [rec && rec.file, rec && rec.lastFrameFile].forEach((f) => {
+    if (typeof f === 'string' && f.startsWith('/files/')) {
+      try {
+        fs.unlinkSync(path.join(FILES_DIR, path.basename(f)));
+      } catch {
+        /* 文件可能已不存在 */
+      }
+    }
+  });
+}
 
 app.post('/api/history/clear', (req, res) => {
   const type = req.body && req.body.type;
@@ -519,16 +564,19 @@ app.post('/api/history/clear', (req, res) => {
     if ((type === 'image' || type === 'video') && r.type !== type) kept.push(r);
     else removed.push(r);
   });
-  removed.forEach((r) => {
-    if (r.file) {
-      try {
-        fs.unlinkSync(path.join(__dirname, r.file));
-      } catch {
-        /* 文件可能已不存在 */
-      }
-    }
-  });
+  removed.forEach(unlinkRecordFiles);
   history = kept;
+  persistHistory();
+  res.json({ ok: true });
+});
+
+/** 删除单条历史记录（连同其本地文件） */
+app.post('/api/history/delete', (req, res) => {
+  const id = String((req.body && req.body.id) || '');
+  const idx = history.findIndex((r) => r.id === id);
+  if (idx === -1) return res.status(404).json({ error: '记录不存在' });
+  const [removed] = history.splice(idx, 1);
+  unlinkRecordFiles(removed);
   persistHistory();
   res.json({ ok: true });
 });
@@ -614,7 +662,7 @@ async function callImageApi(provider, apiKey, payload) {
 }
 
 app.post('/api/generate', async (req, res) => {
-  const { provider, apiKey, prompt, size, ratio, n, watermark, model, referenceImages, scriptId } = req.body || {};
+  const { provider, apiKey, prompt, size, ratio, n, watermark, model, referenceImages, scriptId, assetType, rawPrompt } = req.body || {};
   const conf = PROVIDERS[provider];
   if (!conf) {
     return res.status(400).json({ error: '不支持的服务商，请选择 商汤 SenseNova 或 Agnes' });
@@ -694,7 +742,8 @@ app.post('/api/generate', async (req, res) => {
         type: 'image',
         provider,
         model: useModel,
-        prompt: promptText,
+        prompt: typeof rawPrompt === 'string' && rawPrompt.trim() ? rawPrompt.trim().slice(0, 2000) : promptText,
+        assetType: assetType === 'character' || assetType === 'scene' ? assetType : null,
         size: provider === 'sensenova' ? pixelSize : null,
         ratio: provider === 'agnes' ? String(ratio || '16:9').trim() : null,
         file: null,
@@ -1319,14 +1368,29 @@ app.post('/api/scripts/:id/activate', requireAuth, (req, res) => {
 
 /* ================= InkOS 对接代理 ================= */
 
-const INKOS_BASE = String(process.env.INKOS_BASE || 'http://127.0.0.1:4567').replace(/\/+$/, '');
+/**
+ * 候选地址依次尝试（成功的会被记住，下次优先用）：
+ * env INKOS_BASE > 本机回环 > docker 网关 > host.docker.internal。
+ * 注意：容器内 127.0.0.1 指向工作台容器自身，连不到宿主机上的 InkOS；
+ * 若按默认网桥部署，docker 网关（172.17.0.1）通常可达宿主机发布端口；
+ * 也可用环境变量 INKOS_BASE 直接指定确定地址。
+ */
+const INKOS_BASE_CANDIDATES = [
+  process.env.INKOS_BASE,
+  'http://127.0.0.1:4567',
+  'http://172.17.0.1:4567', // docker 默认网桥网关（容器内访问宿主机发布端口）
+  'http://host.docker.internal:4567', // 需在容器创建时添加 extra-hosts 映射
+]
+  .filter(Boolean)
+  .map((u) => String(u).replace(/\/+$/, ''));
+let inkosBaseIndex = 0;
 const INKOS_ID_RE = /^[\w\u4e00-\u9fa5\-·]{1,120}$/;
 
-async function inkosFetch(path) {
+async function inkosFetchOnce(base, path) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 20000);
   try {
-    const resp = await fetch(`${INKOS_BASE}/api/v1${path}`, { signal: controller.signal });
+    const resp = await fetch(`${base}/api/v1${path}`, { signal: controller.signal });
     const raw = await resp.text();
     let json = null;
     try {
@@ -1338,10 +1402,30 @@ async function inkosFetch(path) {
     return json;
   } catch (err) {
     if (err && err.name === 'AbortError') throw new Error('InkOS 服务响应超时');
-    throw err;
+    const cause = err && err.cause ? `（${err.cause.code || err.cause.message || err.cause}）` : '';
+    const msg = `${(err && err.message) || err}${cause}`;
+    throw new Error(msg.startsWith('InkOS 连接失败') ? msg : `InkOS 连接失败：${msg}`);
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function inkosFetch(path) {
+  let lastErr;
+  for (let i = 0; i < INKOS_BASE_CANDIDATES.length; i++) {
+    const idx = (inkosBaseIndex + i) % INKOS_BASE_CANDIDATES.length;
+    try {
+      const data = await inkosFetchOnce(INKOS_BASE_CANDIDATES[idx], path);
+      if (idx !== inkosBaseIndex) {
+        console.warn(`[inkos] 主地址不可用，切换到 ${INKOS_BASE_CANDIDATES[idx]}`);
+        inkosBaseIndex = idx;
+      }
+      return data;
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  throw lastErr || new Error('InkOS 连接失败：无可用地址');
 }
 
 /** 书目列表 */
@@ -1692,6 +1776,143 @@ app.post('/api/frames', requireAuth, (req, res) => {
   const name = `frame-${Date.now()}-${Math.floor(Math.random() * 1000)}.${ext}`;
   fs.writeFileSync(path.join(FILES_DIR, name), Buffer.from(m[2], 'base64'));
   res.json({ file: `/files/${name}` });
+});
+
+/** 通用图片上传（本地拖拽 / 点选文件）→ 存入 data/files，供参考图与首尾帧使用 */
+app.post('/api/uploads', requireAuth, (req, res) => {
+  const m = /^data:image\/(png|jpeg|jpg|webp);base64,(.+)$/.exec(String((req.body && req.body.dataUrl) || ''));
+  if (!m) return res.status(400).json({ error: '仅支持 PNG / JPG / WebP 图片' });
+  const ext = m[1] === 'jpeg' ? 'jpg' : m[1];
+  const bytes = Buffer.from(m[2], 'base64');
+  if (!bytes.length) return res.status(400).json({ error: '图片内容为空' });
+  if (!fs.existsSync(FILES_DIR)) fs.mkdirSync(FILES_DIR, { recursive: true });
+  const name = `upload-${Date.now()}-${Math.floor(Math.random() * 1000)}.${ext}`;
+  fs.writeFileSync(path.join(FILES_DIR, name), bytes);
+  res.json({ file: `/files/${name}` });
+});
+
+/* ================= 提示词优化（对接 prompt-optimizer 的 MCP 服务） ================= */
+
+/**
+ * 优化器地址候选：env OPTIMIZER_URL > 本机回环 > docker 网关。
+ * 与 InkOS 同样的自动探测策略：初始化握手时按序尝试，成功的地址在本次请求内固定使用。
+ */
+function optimizerCandidates() {
+  return [process.env.OPTIMIZER_URL, 'http://127.0.0.1:28081', 'http://172.17.0.1:28081']
+    .filter(Boolean)
+    .map((u) => String(u).replace(/\/+$/, ''));
+}
+const OPTIMIZER_AUTH =
+  'Basic ' +
+  Buffer.from(`${process.env.OPTIMIZER_USER || 'admin'}:${process.env.OPTIMIZER_PASS || '123456'}`).toString('base64');
+
+/** 解析 MCP 响应：可能是 SSE（event/data 行）或普通 JSON */
+function parseMcpSse(text) {
+  const lines = String(text)
+    .split(/\r?\n/)
+    .filter((l) => l.startsWith('data:'));
+  if (!lines.length) {
+    try {
+      return JSON.parse(text);
+    } catch {
+      return null;
+    }
+  }
+  try {
+    return JSON.parse(lines[lines.length - 1].slice(5).trim());
+  } catch {
+    return null;
+  }
+}
+
+async function mcpPost(base, body, sessionId, timeoutMs = 150000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const resp = await fetch(`${base}/mcp`, {
+      method: 'POST',
+      headers: {
+        Authorization: OPTIMIZER_AUTH,
+        'Content-Type': 'application/json',
+        Accept: 'application/json, text/event-stream',
+        ...(sessionId ? { 'mcp-session-id': sessionId } : {}),
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    const raw = await resp.text();
+    if (!resp.ok) throw new Error(pickErrorMessage(null, raw, resp.status) || `HTTP ${resp.status}`);
+    return { json: parseMcpSse(raw), sessionId: resp.headers.get('mcp-session-id') };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** 提示词优化：走 prompt-optimizer 的 MCP 工具 optimize-user-prompt */
+app.post('/api/optimize', requireAuth, async (req, res) => {
+  const { prompt, template } = req.body || {};
+  const promptText = typeof prompt === 'string' ? prompt.trim() : '';
+  if (!promptText) return res.status(400).json({ error: '请先填写提示词' });
+  if (promptText.length > 4000) return res.status(400).json({ error: '提示词过长（上限 4000 字）' });
+  const tpl = ['user-prompt-professional', 'user-prompt-basic', 'user-prompt-planning'].includes(template)
+    ? template
+    : 'user-prompt-professional';
+  const startedAt = Date.now();
+  try {
+    const bases = optimizerCandidates();
+    let base = null;
+    let sid = null;
+    let lastErr = null;
+    for (let i = 0; i < bases.length; i++) {
+      const b = bases[i];
+      try {
+        const init = await mcpPost(
+          b,
+          {
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'initialize',
+            params: {
+              protocolVersion: '2024-11-05',
+              capabilities: {},
+              clientInfo: { name: 'ai-image-studio', version: '1.0' },
+            },
+          },
+          null,
+          10000 // 握手应快速返回，短超时避免不可达地址长时间挂起
+        );
+        base = b;
+        sid = init.sessionId;
+        break;
+      } catch (e) {
+        lastErr = e;
+      }
+    }
+    if (!base || !sid) throw (lastErr || new Error('优化服务不可达'));
+    await mcpPost(base, { jsonrpc: '2.0', method: 'notifications/initialized' }, sid); // 通知无需解析响应体
+    const call = await mcpPost(
+      base,
+      {
+        jsonrpc: '2.0',
+        id: 3,
+        method: 'tools/call',
+        params: { name: 'optimize-user-prompt', arguments: { prompt: promptText, template: tpl } },
+      },
+      sid
+    );
+    const result = call.json && call.json.result;
+    const text = result && Array.isArray(result.content) && result.content[0] ? result.content[0].text : '';
+    if (result && result.isError) throw new Error(String(text || '优化失败').slice(0, 300));
+    if (!text) throw new Error('优化服务未返回内容');
+    const optimized = String(text)
+      .trim()
+      .replace(/^["“”']+|["“”']+$/g, '') // 去掉模型输出首尾的包裹引号
+      .slice(0, 8000);
+    res.json({ optimized, debug: { base, elapsed: Date.now() - startedAt } });
+  } catch (err) {
+    if (err && err.name === 'AbortError') return res.status(504).json({ error: '优化超时，请稍后重试', debug: { elapsed: Date.now() - startedAt } });
+    res.status(502).json({ error: `提示词优化失败：${(err && err.message) || err}`, debug: { elapsed: Date.now() - startedAt } });
+  }
 });
 
 /* ================= 图片代理与下载 ================= */

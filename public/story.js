@@ -35,7 +35,6 @@ const STORY_STYLES = [
 ];
 
 const STORY_SHOT_COUNTS = [8, 12, 16, 20, 24];
-const STORY_MANUAL = '__manual__';
 const STORY_SHOT_IMAGE_SIZE = '2752x1536'; // 16:9
 
 const storyState = {
@@ -103,6 +102,7 @@ async function refreshLlmConfigs() {
     llmConfigs = Array.isArray(data.configs) ? data.configs : [];
     llmActiveId = data.activeId || null;
     renderLlmConfigs();
+    renderLlmActiveSelect();
   } catch {
     list.innerHTML = '';
     const hint = document.createElement('p');
@@ -110,6 +110,29 @@ async function refreshLlmConfigs() {
     hint.textContent = '文本模型配置加载失败';
     list.appendChild(hint);
   }
+}
+
+/** 故事工坊侧栏的文本模型下拉（切换即激活对应配置） */
+function renderLlmActiveSelect() {
+  const sel = $('#llm-active-select');
+  if (!sel) return;
+  sel.innerHTML = '';
+  if (!auth.user || !llmConfigs.length) {
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = auth.user ? '请先在「账号管理」中添加文本模型' : '登录后可配置文本模型';
+    sel.appendChild(opt);
+    sel.disabled = true;
+    return;
+  }
+  sel.disabled = false;
+  llmConfigs.forEach((c) => {
+    const opt = document.createElement('option');
+    opt.value = c.id;
+    opt.textContent = `${c.name} · ${c.model}`;
+    sel.appendChild(opt);
+  });
+  sel.value = llmActiveId && llmConfigs.some((c) => c.id === llmActiveId) ? llmActiveId : llmConfigs[0].id;
 }
 
 function renderLlmConfigs() {
@@ -233,6 +256,7 @@ async function activateLlmConfig(id) {
     if (!resp.ok) throw new Error('设置失败');
     llmActiveId = id;
     renderLlmConfigs();
+    renderLlmActiveSelect();
   } catch (err) {
     showToast(err.message || '设置失败');
   }
@@ -742,9 +766,19 @@ function buildShotCard(shot, i) {
   });
   body.appendChild(sp);
 
+  const vpRow = document.createElement('div');
+  vpRow.className = 'field-label-row';
   const vpLabel = document.createElement('label');
   vpLabel.textContent = '视频提示词（画面 + 运动）';
-  body.appendChild(vpLabel);
+  const vpOpt = document.createElement('button');
+  vpOpt.type = 'button';
+  vpOpt.className = 'mini-btn';
+  vpOpt.textContent = 'AI 优化';
+  vpOpt.title = '调用提示词优化服务改写当前视频提示词';
+  vpOpt.addEventListener('click', () => optimizeTextarea(vp, vpOpt));
+  vpRow.appendChild(vpLabel);
+  vpRow.appendChild(vpOpt);
+  body.appendChild(vpRow);
   const vp = document.createElement('textarea');
   vp.rows = 3;
   vp.value = shot.videoPrompt || '';
@@ -1254,60 +1288,13 @@ function closeStoryPicker() {
   storyPickerTarget = null;
 }
 
-/* ---------------- 密钥选择（复用账户密钥库） ---------------- */
+/* ---------------- 密钥（集中到右上角账号浮窗管理） ---------------- */
 
-function renderStoryKeySelects() {
-  const sensSelect = $('#story-sensenova-key-select');
-  const agnesSelect = $('#story-agnes-key-select');
-  const sensInput = $('#story-sensenova-key');
-  const agnesInput = $('#story-agnes-key');
-  if (!auth.user) {
-    sensSelect.innerHTML = '';
-    agnesSelect.innerHTML = '';
-    return;
-  }
-  const fill = (select, provider) => {
-    select.innerHTML = '';
-    const list = auth.keys.filter((k) => k.provider === provider);
-    if (!list.length) {
-      const opt = document.createElement('option');
-      opt.value = STORY_MANUAL;
-      opt.textContent = '无保存密钥，请手动粘贴';
-      select.appendChild(opt);
-      select.value = STORY_MANUAL;
-      return;
-    }
-    list.forEach((k) => {
-      const opt = document.createElement('option');
-      opt.value = k.key;
-      opt.textContent = `${k.name}（${k.key.length > 12 ? k.key.slice(0, 6) + '••••' + k.key.slice(-4) : '••••••'}）`;
-      select.appendChild(opt);
-    });
-    const manual = document.createElement('option');
-    manual.value = STORY_MANUAL;
-    manual.textContent = '手动输入';
-    select.appendChild(manual);
-  };
-  fill(sensSelect, 'sensenova');
-  fill(agnesSelect, 'agnes');
-
-  const sync = (select, input) => {
-    if (select.value === STORY_MANUAL) {
-      input.hidden = false;
-      return '';
-    }
-    input.hidden = true;
-    return select.value;
-  };
-  storyState.sensKey = sync(sensSelect, sensInput);
-  storyState.agnesKey = sync(agnesSelect, agnesInput);
-}
-
+/** 取账号中该服务商的第一把密钥（轮询兜底用；提交走 withKeyFailover） */
 function storyKey(provider) {
-  const select = $(provider === 'sensenova' ? '#story-sensenova-key-select' : '#story-agnes-key-select');
-  const input = $(provider === 'sensenova' ? '#story-sensenova-key' : '#story-agnes-key');
-  if (select.value === STORY_MANUAL) return input.value.trim();
-  return select.value;
+  if (!auth.user) return '';
+  const k = auth.keys.find((x) => x.provider === provider);
+  return k ? k.key : '';
 }
 
 /* ---------------- 设定图生成（角色三视图 / 场景图） ---------------- */
@@ -1328,11 +1315,6 @@ async function saveStoryMeta() {
 }
 
 async function generateShotVideo(shot, i, btn) {
-  const apiKey = storyKey('agnes');
-  if (!apiKey) {
-    showToast('请先配置 Agnes 视频 Key');
-    return;
-  }
   if (shot.status === 'submitting' || shot.status === 'video_pending') return;
   const story = storyState.current;
   const prev = i > 0 && story ? story.shots[i - 1] : null;
@@ -1407,7 +1389,6 @@ async function generateShotVideo(shot, i, btn) {
   renderShots();
   try {
     const bodyObj = {
-      apiKey,
       prompt,
       mode,
       seconds: String(shot.duration || 4),
@@ -1416,13 +1397,19 @@ async function generateShotVideo(shot, i, btn) {
       scriptId: (story && story.scriptId) || activeScriptId(),
       ...frames,
     };
-    const resp = await fetch('/api/video', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(bodyObj),
-    });
-    const data = await resp.json().catch(() => ({}));
-    if (!resp.ok) throw new Error(data.error || `请求失败（HTTP ${resp.status}）`);
+    const { out: data, usedKey, notices } = await withKeyFailover('agnes', (key) =>
+      fetch('/api/video', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...bodyObj, apiKey: key }),
+      }).then(async (resp) => {
+        const d = await resp.json().catch(() => ({}));
+        if (!resp.ok) throw new Error(d.error || `请求失败（HTTP ${resp.status}）`);
+        return d;
+      })
+    );
+    notifyKeyFailover(notices, usedKey);
+    shot.pollKey = usedKey.key; // 轮询沿用提交成功的密钥
     const rec = data.record;
     if (!rec) throw new Error('接口未返回任务记录');
     shot.videoRecordId = rec.id;
@@ -1548,7 +1535,7 @@ function startShotPolling(shot, i) {
     }
     try {
       const resp = await fetch(`/api/video/status/${encodeURIComponent(shot.taskId)}`, {
-        headers: { 'X-Api-Key': storyKey('agnes') },
+        headers: { 'X-Api-Key': shot.pollKey || storyKey('agnes') },
       });
       const data = await resp.json().catch(() => ({}));
       if (data.status === 'done') {
@@ -1582,10 +1569,6 @@ async function batchVideos() {
   const story = storyState.current;
   if (!story) {
     showToast('请先选择或创建故事项目');
-    return;
-  }
-  if (!storyKey('agnes')) {
-    showToast('请先配置 Agnes 视频 Key');
     return;
   }
   const targets = [];
@@ -1769,21 +1752,21 @@ function initStory() {
     if (e.target === $('#story-picker-modal')) closeStoryPicker();
   });
 
-  $('#story-sensenova-key-select').addEventListener('change', renderStoryKeySelects);
-  $('#story-agnes-key-select').addEventListener('change', renderStoryKeySelects);
-
   $('#story-chain').checked = storyState.chain;
   $('#story-chain').addEventListener('change', (e) => {
     storyState.chain = e.target.checked;
     storyPersistPrefs();
   });
 
-  renderStoryKeySelects();
+  $('#llm-active-select').addEventListener('change', (e) => {
+    if (e.target.value) activateLlmConfig(e.target.value);
+  });
+  $('#llm-manage-btn').addEventListener('click', () => openAccountModal('llm'));
+
   loadInkosBooks();
   document.addEventListener('auth-changed', () => {
     refreshLlmConfigs();
     loadProjects();
-    renderStoryKeySelects();
     loadInkosBooks();
   });
 }

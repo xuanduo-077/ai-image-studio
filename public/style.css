@@ -829,6 +829,23 @@ select { cursor: pointer; }
   border-radius: var(--radius-sm);
   padding: var(--space-2);
   background: var(--surface-2);
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.slot-box.drag-over {
+  border-color: var(--accent);
+  border-style: solid;
+  background: var(--surface-3, var(--surface-2));
+}
+
+.slot-uploading {
+  aspect-ratio: 16 / 9;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  font-size: 12.5px;
+  color: var(--text-3);
 }
 
 .slot-label {
@@ -1362,6 +1379,127 @@ select { cursor: pointer; }
   width: 100%;
   font-size: 12.5px;
   padding: 7px 8px;
+}
+
+/* ===== 生成类型 / 结果分类 / 重命名 ===== */
+.gallery-filter-row {
+  margin-bottom: var(--space-3);
+}
+
+.type-badge {
+  display: inline-block;
+  font-size: 10.5px;
+  line-height: 1;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  color: var(--text-3);
+  margin-right: 6px;
+  white-space: nowrap;
+  vertical-align: 1px;
+}
+
+.type-badge.t-character {
+  border-color: #7aa2f7;
+  color: #7aa2f7;
+}
+
+.type-badge.t-scene {
+  border-color: #9ece6a;
+  color: #9ece6a;
+}
+
+.img-name {
+  display: flex;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.img-name-text {
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.img-name-text:hover {
+  text-decoration: underline;
+  color: var(--accent);
+}
+
+.picker-name {
+  position: absolute;
+  bottom: 5px;
+  left: 5px;
+  right: 5px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.6);
+  border-radius: 6px;
+  padding: 2px 6px;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.mini-btn.danger {
+  color: #f7768e;
+}
+
+.mini-btn.danger:hover {
+  border-color: rgba(247, 118, 142, 0.5);
+}
+
+.picker-filter-row {
+  margin-bottom: var(--space-2);
+}
+
+/* ===== 账号浮窗 / 密钥集中管理 ===== */
+.user-chip {
+  cursor: pointer;
+}
+
+.key-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.key-status-row .hint {
+  flex: 1;
+}
+
+.acct-pane .llm-list,
+.acct-pane .key-list {
+  margin-bottom: var(--space-2);
+}
+
+.acct-sub {
+  margin: 0 0 var(--space-2);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.acct-pane .add-key-form {
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+}
+
+.key-item-flag {
+  font-size: 10.5px;
+  line-height: 1;
+  color: #f7768e;
+  border: 1px solid rgba(247, 118, 142, 0.45);
+  border-radius: 999px;
+  padding: 2px 8px;
+  white-space: nowrap;
 }
 
 /* ===== 滚动条 ===== */

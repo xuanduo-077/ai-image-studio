@@ -43,7 +43,26 @@ const PROVIDER_META = {
   },
 };
 
-const MANUAL_KEY = '__manual__';
+/* 生成类型：自由 / 人物三视图 / 场景图（选后者会套用模板强化提示词，并在结果中分类） */
+const ASSET_TYPES = [
+  { value: '', label: '自由生成' },
+  { value: 'character', label: '人物三视图' },
+  { value: 'scene', label: '场景图' },
+];
+const ASSET_TYPE_LABEL = { character: '人物三视图', scene: '场景图' };
+
+function wrapAssetPrompt(type, raw) {
+  if (type === 'character') {
+    return (
+      `角色三视图设定图：同一个角色的三个视角横向并排——正面全身、侧面全身、背面全身，站立姿势，纯浅灰色背景，` +
+      `画面中只有这一个角色；角色设定：${raw}；三个视角的五官、发型、服装、配饰必须完全一致，全身完整可见`
+    );
+  }
+  if (type === 'scene') {
+    return `场景设定图：${raw}；画面中不出现任何人物，纯环境描绘，注重空间布局、光线氛围与细节质感`;
+  }
+  return raw;
+}
 
 const state = {
   provider: 'sensenova',
@@ -55,8 +74,7 @@ const state = {
   ratio: '16:9',
   count: 1,
   watermark: false,
-  videoKey: '',
-  lastVideoKeyId: null,
+  assetType: '',
   vmode: 'reference',
   vseconds: '5',
   vsize: '720P',
@@ -163,13 +181,12 @@ function loadPersisted() {
     if (saved.keys) state.keys = { ...state.keys, ...saved.keys };
     if (saved.model) state.model = { ...state.model, ...saved.model };
     if (saved.lastKeyId) state.lastKeyId = { ...state.lastKeyId, ...saved.lastKeyId };
+    if (typeof saved.assetType === 'string') state.assetType = saved.assetType;
     if (typeof saved.size === 'string' && saved.size) state.size = saved.size;
     if (typeof saved.agnesSize === 'string' && saved.agnesSize) state.agnesSize = saved.agnesSize;
     if (typeof saved.ratio === 'string' && saved.ratio) state.ratio = saved.ratio;
     if (Number.isFinite(saved.count)) state.count = Math.min(Math.max(saved.count, 1), 4);
     if (typeof saved.watermark === 'boolean') state.watermark = saved.watermark;
-    if (typeof saved.videoKey === 'string') state.videoKey = saved.videoKey;
-    if (typeof saved.lastVideoKeyId === 'string') state.lastVideoKeyId = saved.lastVideoKeyId;
     if (saved.vmode === 'reference' || saved.vmode === 'keyframe') state.vmode = saved.vmode;
     if (typeof saved.vseconds === 'string' && saved.vseconds) state.vseconds = saved.vseconds;
     if (typeof saved.vsize === 'string' && saved.vsize) state.vsize = saved.vsize;
@@ -217,12 +234,49 @@ function renderChips(container, options, current, onPick) {
   });
 }
 
-function renderModelChips() {
-  renderChips($('#model-chips'), PROVIDER_MODELS.sensenova, state.model.sensenova, (v) => {
-    state.model.sensenova = v;
-    renderModelChips();
-    persist();
-  });
+/* ---- 多密钥故障转移（图片 / 视频生成共用） ---- */
+
+const keyHealth = {}; // keyId -> { limited, error, at }
+
+function isKeyLimitError(msg) {
+  return /429|rate.?limit|too many|quota|余额|额度|欠费|insufficient|balance|限流|限制|forbidden|403|unauthorized|401|invalid[\s_-]*(api[\s_-]*)?key/i.test(
+    String(msg)
+  );
+}
+
+function markKeyHealth(key, err) {
+  const msg = String((err && err.message) || err);
+  keyHealth[key.id] = { limited: isKeyLimitError(msg), error: msg.slice(0, 140), at: Date.now() };
+}
+
+/**
+ * 按顺序尝试账号中保存的密钥：成功即返回；一把失败自动换下一把，
+ * 全部失败时抛出包含各密钥错误详情的异常。task(key, keyItem) 返回结果。
+ */
+async function withKeyFailover(provider, task) {
+  const keys = auth.user ? keysForProvider(provider) : [];
+  if (!keys.length) {
+    throw new Error(`请先点击右上角账号，在浮窗中添加 ${PROVIDER_META[provider].name} 密钥`);
+  }
+  const notices = [];
+  for (const k of keys) {
+    try {
+      const out = await task(k.key, k);
+      return { out, usedKey: k, notices };
+    } catch (err) {
+      markKeyHealth(k, err);
+      notices.push({ id: k.id, name: k.name, error: String((err && err.message) || err).slice(0, 100) });
+    }
+  }
+  const detail = notices.map((n) => `「${n.name}」${n.error}`).join('；');
+  throw new Error(`所有 ${PROVIDER_META[provider].name} 密钥均不可用：${detail}`);
+}
+
+/** 部分密钥失败但最终成功时，提示用户已自动切换 */
+function notifyKeyFailover(notices, usedKey) {
+  if (notices && notices.length && usedKey) {
+    showToast(`密钥「${notices.map((n) => n.name).join('」「')}」不可用，已自动切换到「${usedKey.name}」`);
+  }
 }
 
 function renderSizePresets() {
@@ -261,9 +315,11 @@ function setAuthUI() {
   const area = $('#user-area');
   area.innerHTML = '';
   if (auth.user) {
-    const chip = document.createElement('span');
+    const chip = document.createElement('button');
+    chip.type = 'button';
     chip.className = 'user-chip';
-    chip.title = auth.user.username;
+    chip.title = '账号与模型管理';
+    chip.addEventListener('click', () => openAccountModal());
     chip.innerHTML =
       '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>';
     const name = document.createElement('b');
@@ -293,7 +349,7 @@ async function refreshAuth() {
     auth.user = null;
     auth.keys = [];
     setAuthUI();
-    renderSavedKeySelect();
+    renderKeyStatuses();
     return;
   }
   try {
@@ -309,8 +365,7 @@ async function refreshAuth() {
     localStorage.removeItem(LS_TOKEN_KEY);
   }
   setAuthUI();
-  renderSavedKeySelect();
-  renderVideoKeySelect();
+  renderKeyStatuses();
   document.dispatchEvent(new CustomEvent('auth-changed'));
 }
 
@@ -472,100 +527,20 @@ function keysForProvider(provider) {
   return auth.keys.filter((k) => k.provider === provider);
 }
 
-/** 渲染「已保存密钥」下拉框；登录且有该服务商密钥时显示，并自动填充 */
-function renderSavedKeySelect() {
-  const row = $('#saved-keys-row');
-  const select = $('#saved-key-select');
-  const list = auth.user ? keysForProvider(state.provider) : [];
-  select.innerHTML = '';
-
-  if (!list.length) {
-    row.hidden = true;
-    return;
-  }
-
-  list.forEach((k) => {
-    const opt = document.createElement('option');
-    opt.value = k.id;
-    opt.textContent = `${k.name}（${maskKey(k.key)}）`;
-    select.appendChild(opt);
-  });
-  const manual = document.createElement('option');
-  manual.value = MANUAL_KEY;
-  manual.textContent = '手动输入 Key';
-  select.appendChild(manual);
-
-  const lastId = state.lastKeyId[state.provider];
-  const activeId = list.some((k) => k.id === lastId) ? lastId : list[0].id;
-  select.value = activeId;
-  state.lastKeyId[state.provider] = activeId;
-  persist();
-
-  const item = list.find((k) => k.id === activeId);
-  if (item) $('#api-key').value = item.key;
-
-  row.hidden = false;
-}
-
-function onSavedKeyChange() {
-  const select = $('#saved-key-select');
-  if (select.value === MANUAL_KEY) {
-    state.lastKeyId[state.provider] = null;
-    persist();
-    return;
-  }
-  const item = auth.keys.find((k) => k.id === select.value);
-  if (item) {
-    state.lastKeyId[state.provider] = item.id;
-    $('#api-key').value = item.key;
-    persist();
-  }
-}
-
-/** 视频面板：Agnes 已保存密钥下拉（与图片区共用账户密钥库） */
-function renderVideoKeySelect() {
-  const row = $('#video-keys-row');
-  const select = $('#video-key-select');
-  const list = auth.user ? keysForProvider('agnes') : [];
-  select.innerHTML = '';
-  if (!list.length) {
-    row.hidden = true;
-    return;
-  }
-  list.forEach((k) => {
-    const opt = document.createElement('option');
-    opt.value = k.id;
-    opt.textContent = `${k.name}（${maskKey(k.key)}）`;
-    select.appendChild(opt);
-  });
-  const manual = document.createElement('option');
-  manual.value = MANUAL_KEY;
-  manual.textContent = '手动输入 Key';
-  select.appendChild(manual);
-
-  const lastId = state.lastVideoKeyId;
-  const activeId = list.some((k) => k.id === lastId) ? lastId : list[0].id;
-  select.value = activeId;
-  state.lastVideoKeyId = activeId;
-  persist();
-  const item = list.find((k) => k.id === activeId);
-  if (item) $('#video-key').value = item.key;
-  row.hidden = false;
-}
-
-function onVideoKeyChange() {
-  const select = $('#video-key-select');
-  if (select.value === MANUAL_KEY) {
-    state.lastVideoKeyId = null;
-    persist();
-    return;
-  }
-  const item = auth.keys.find((k) => k.id === select.value);
-  if (item) {
-    state.lastVideoKeyId = item.id;
-    $('#video-key').value = item.key;
-    persist();
-  }
+/** 更新图片 / 视频面板的密钥状态行 */
+function renderKeyStatuses() {
+  const mk = (sel, provider) => {
+    const el = $(sel);
+    if (!el) return;
+    const n = auth.user ? keysForProvider(provider).length : 0;
+    el.textContent = auth.user
+      ? n
+        ? `已保存 ${n} 把密钥，自动选用`
+        : '尚未保存密钥，点击「账号管理」添加'
+      : '登录后使用账号中保存的密钥';
+  };
+  mk('#img-key-status', state.provider);
+  mk('#video-key-status', 'agnes');
 }
 
 /* ---------------- 登录 / 注册弹窗 ---------------- */
@@ -647,117 +622,123 @@ async function logout() {
   auth.keys = [];
   localStorage.removeItem(LS_TOKEN_KEY);
   setAuthUI();
-  renderSavedKeySelect();
+  renderKeyStatuses();
   document.dispatchEvent(new CustomEvent('auth-changed'));
   showToast('已退出登录');
 }
 
-/* ---------------- 密钥管理弹窗 ---------------- */
+/* ---------------- 账号与模型浮窗 ---------------- */
 
-function openKeysModal() {
-  $('#add-key-form').reset();
-  hideKeyError();
-  const sel = $('#new-key-provider');
-  sel.innerHTML = '';
-  Object.entries(PROVIDER_META).forEach(([id, meta]) => {
-    const opt = document.createElement('option');
-    opt.value = id;
-    opt.textContent = meta.name;
-    sel.appendChild(opt);
+function setAccountTab(tab) {
+  ['llm', 'imgkey', 'vidkey'].forEach((t) => {
+    $(`#acct-tab-${t}`).classList.toggle('active', t === tab);
+    $(`#acct-tab-${t}`).setAttribute('aria-selected', String(t === tab));
+    $(`#acct-pane-${t}`).hidden = t !== tab;
   });
-  sel.value = state.provider;
-  renderKeyList();
-  $('#keys-modal').hidden = false;
 }
 
-function closeKeysModal() {
-  $('#keys-modal').hidden = true;
+function openAccountModal(tab) {
+  setAccountTab(tab || 'llm');
+  renderAccountKeys();
+  if (typeof refreshLlmConfigs === 'function') refreshLlmConfigs(); // story.js 提供
+  $('#account-modal').hidden = false;
 }
 
-function hideKeyError() {
-  $('#key-error').hidden = true;
+function closeAccountModal() {
+  $('#account-modal').hidden = true;
 }
 
-function showKeyError(msg) {
-  const box = $('#key-error');
+function showAcctError(sel, msg) {
+  const box = $(sel);
+  if (!box) return;
   box.textContent = msg;
   box.hidden = false;
 }
 
-function renderKeyList() {
-  const list = $('#key-list');
-  list.innerHTML = '';
-  if (!auth.keys.length) {
-    const empty = document.createElement('p');
-    empty.className = 'key-empty';
-    empty.textContent = '还没有保存任何密钥，在下方添加后，登录即可一键填充';
-    list.appendChild(empty);
-    return;
-  }
-  auth.keys.forEach((k) => {
-    const row = document.createElement('div');
-    row.className = 'key-item';
-
-    const provider = document.createElement('span');
-    provider.className = 'key-item-provider';
-    provider.textContent = PROVIDER_META[k.provider] ? PROVIDER_META[k.provider].name : k.provider;
-
-    const name = document.createElement('span');
-    name.className = 'key-item-name';
-    name.textContent = k.name;
-    name.title = k.name;
-
-    const value = document.createElement('span');
-    value.className = 'key-item-value';
-    value.textContent = maskKey(k.key);
-    value.title = '点击显示完整 Key';
-    let revealed = false;
-    value.addEventListener('click', () => {
-      revealed = !revealed;
-      value.textContent = revealed ? k.key : maskKey(k.key);
-    });
-
-    const del = document.createElement('button');
-    del.type = 'button';
-    del.className = 'key-item-del';
-    del.setAttribute('aria-label', `删除密钥 ${k.name}`);
-    del.innerHTML =
-      '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>';
-    del.addEventListener('click', async () => {
-      if (!confirm(`确定删除密钥「${k.name}」？`)) return;
-      try {
-        const resp = await fetch(`/api/keys/${k.id}`, { method: 'DELETE', headers: authHeaders() });
-        if (!resp.ok) throw new Error('删除失败');
-        auth.keys = auth.keys.filter((x) => x.id !== k.id);
-        if (state.lastKeyId[k.provider] === k.id) state.lastKeyId[k.provider] = null;
-        persist();
-        renderKeyList();
-        renderSavedKeySelect();
-        renderVideoKeySelect();
-      } catch (err) {
-        showKeyError(err.message || '删除失败，请稍后重试');
-      }
-    });
-
-    row.appendChild(provider);
-    row.appendChild(name);
-    row.appendChild(value);
-    row.appendChild(del);
-    list.appendChild(row);
-  });
+function hideAcctError(sel) {
+  const box = $(sel);
+  if (box) box.hidden = true;
 }
 
-async function handleAddKey(e) {
-  e.preventDefault();
-  const provider = $('#new-key-provider').value;
-  const name = $('#new-key-name').value.trim();
-  const key = $('#new-key-value').value.trim();
-  if (!key) {
-    showKeyError('请粘贴 API Key 内容');
-    return;
+function keyItemRow(k) {
+  const row = document.createElement('div');
+  row.className = 'key-item';
+
+  const name = document.createElement('span');
+  name.className = 'key-item-name';
+  name.textContent = k.name;
+  name.title = k.name;
+  row.appendChild(name);
+
+  const value = document.createElement('span');
+  value.className = 'key-item-value';
+  value.textContent = maskKey(k.key);
+  value.title = '点击显示完整 Key';
+  let revealed = false;
+  value.addEventListener('click', () => {
+    revealed = !revealed;
+    value.textContent = revealed ? k.key : maskKey(k.key);
+  });
+  row.appendChild(value);
+
+  const health = keyHealth[k.id];
+  if (health && health.limited && Date.now() - health.at < 30 * 60 * 1000) {
+    const flag = document.createElement('span');
+    flag.className = 'key-item-flag';
+    flag.textContent = '受限';
+    flag.title = health.error;
+    row.appendChild(flag);
   }
-  const btn = $('.add-key-form .btn-secondary');
-  btn.disabled = true;
+
+  const del = document.createElement('button');
+  del.type = 'button';
+  del.className = 'key-item-del';
+  del.setAttribute('aria-label', `删除密钥 ${k.name}`);
+  del.innerHTML =
+    '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>';
+  del.addEventListener('click', async () => {
+    if (!confirm(`确定删除密钥「${k.name}」？`)) return;
+    try {
+      const resp = await fetch(`/api/keys/${k.id}`, { method: 'DELETE', headers: authHeaders() });
+      if (!resp.ok) throw new Error('删除失败');
+      auth.keys = auth.keys.filter((x) => x.id !== k.id);
+      delete keyHealth[k.id];
+      renderAccountKeys();
+      renderKeyStatuses();
+      showToast('密钥已删除');
+    } catch (err) {
+      showToast(err.message || '删除失败');
+    }
+  });
+  row.appendChild(del);
+  return row;
+}
+
+function renderAccountKeys() {
+  const fill = (sel, provider) => {
+    const box = $(sel);
+    if (!box) return;
+    box.innerHTML = '';
+    const list = auth.user ? keysForProvider(provider) : [];
+    if (!list.length) {
+      const empty = document.createElement('p');
+      empty.className = 'key-empty';
+      empty.textContent = auth.user ? '暂无密钥，在下方添加' : '登录后可管理密钥';
+      box.appendChild(empty);
+      return;
+    }
+    list.forEach((k) => box.appendChild(keyItemRow(k)));
+  };
+  fill('#acct-key-list-sensenova', 'sensenova');
+  fill('#acct-key-list-agnes', 'agnes');
+  fill('#acct-key-list-video', 'agnes');
+}
+
+async function addAccountKey(provider, name, key, errSel) {
+  if (!key) {
+    showAcctError(errSel, '请粘贴 API Key 内容');
+    return false;
+  }
   try {
     const resp = await fetch('/api/keys', {
       method: 'POST',
@@ -767,19 +748,38 @@ async function handleAddKey(e) {
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok) throw new Error(data.error || `请求失败（HTTP ${resp.status}）`);
     auth.keys.push(data.key);
-    state.lastKeyId[provider] = data.key.id;
-    persist();
-    renderKeyList();
-    renderSavedKeySelect();
-    renderVideoKeySelect();
-    $('#add-key-form').reset();
-    $('#new-key-provider').value = provider;
-    showToast('密钥已保存');
+    renderAccountKeys();
+    renderKeyStatuses();
+    showToast(`已添加 ${PROVIDER_META[provider].name} 密钥「${data.key.name}」`);
+    return true;
   } catch (err) {
-    showKeyError(err.message || '保存失败，请稍后重试');
-  } finally {
-    btn.disabled = false;
+    showAcctError(errSel, err.message || '保存失败，请稍后重试');
+    return false;
   }
+}
+
+async function handleAcctImgKeySubmit(e) {
+  e.preventDefault();
+  hideAcctError('#acct-imgkey-error');
+  const ok = await addAccountKey(
+    $('#acct-imgkey-provider').value,
+    $('#acct-imgkey-name').value.trim() || '未命名',
+    $('#acct-imgkey-value').value.trim(),
+    '#acct-imgkey-error'
+  );
+  if (ok) e.target.reset();
+}
+
+async function handleAcctVidKeySubmit(e) {
+  e.preventDefault();
+  hideAcctError('#acct-vidkey-error');
+  const ok = await addAccountKey(
+    'agnes',
+    $('#acct-vidkey-name').value.trim() || '未命名',
+    $('#acct-vidkey-value').value.trim(),
+    '#acct-vidkey-error'
+  );
+  if (ok) e.target.reset();
 }
 
 /* ---------------- 视频生成 ---------------- */
@@ -800,6 +800,72 @@ function setSlotValue(target, val) {
   if (target.type === 'ref') video.slots.refs[target.index] = val;
   else video.slots[target.type] = val;
   renderSlots();
+}
+
+/* ---- 本地图片上传（拖拽 / 点选） ---- */
+
+const UPLOAD_MAX_BYTES = 12 * 1024 * 1024; // 与服务端 JSON 16mb 限制匹配
+let uploadingSlotKey = null;
+
+function slotKeyOf(t) {
+  return `${t.type}:${t.index == null ? '' : t.index}`;
+}
+
+/** 读取本地图片并上传到服务端，成功后填入槽位 */
+async function uploadSlotFile(file, target) {
+  if (!file) return;
+  if (!/^image\/(png|jpe?g|webp)$/i.test(file.type)) {
+    showToast('仅支持 PNG / JPG / WebP 图片');
+    return;
+  }
+  if (file.size > UPLOAD_MAX_BYTES) {
+    showToast('图片太大，请控制在 12MB 以内');
+    return;
+  }
+  const key = slotKeyOf(target);
+  uploadingSlotKey = key;
+  renderSlots();
+  try {
+    const dataUrl = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(new Error('读取图片失败'));
+      reader.readAsDataURL(file);
+    });
+    const resp = await fetch('/api/uploads', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ dataUrl }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.error || `上传失败（HTTP ${resp.status}）`);
+    if (!data.file) throw new Error('上传结果异常');
+    setSlotValue(target, { kind: 'file', value: data.file });
+    showToast('图片已上传');
+  } catch (err) {
+    showToast(err.message || '上传失败，请重试');
+  } finally {
+    uploadingSlotKey = null;
+    renderSlots();
+  }
+}
+
+/** 给槽位容器绑定拖放（重复调用安全） */
+function bindSlotDrop(box, target) {
+  if (box.dataset.dropBound === '1') return;
+  box.dataset.dropBound = '1';
+  box.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    box.classList.add('drag-over');
+  });
+  box.addEventListener('dragleave', () => box.classList.remove('drag-over'));
+  box.addEventListener('drop', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    box.classList.remove('drag-over');
+    const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    if (file) uploadSlotFile(file, target);
+  });
 }
 
 function buildSlotInner(target, label) {
@@ -826,7 +892,21 @@ function buildSlotInner(target, label) {
     img.className = 'slot-preview';
     img.alt = label;
     img.src = slotSrc(val);
+    img.title = '拖拽新图片到此框可直接替换';
     wrap.appendChild(img);
+    return wrap;
+  }
+
+  if (uploadingSlotKey === slotKeyOf(target)) {
+    const up = document.createElement('div');
+    up.className = 'slot-uploading';
+    const sp = document.createElement('span');
+    sp.className = 'pending-spinner';
+    const txt = document.createElement('span');
+    txt.textContent = '上传中…';
+    up.appendChild(sp);
+    up.appendChild(txt);
+    wrap.appendChild(up);
     return wrap;
   }
 
@@ -839,42 +919,24 @@ function buildSlotInner(target, label) {
   pick.textContent = '从生成结果选择';
   pick.addEventListener('click', () => openPicker(target));
 
-  const paste = document.createElement('button');
-  paste.type = 'button';
-  paste.className = 'slot-btn';
-  paste.textContent = '粘贴链接';
-  paste.addEventListener('click', () => {
-    const row = document.createElement('div');
-    row.className = 'slot-url-row';
+  const upload = document.createElement('button');
+  upload.type = 'button';
+  upload.className = 'slot-btn';
+  upload.textContent = '上传图片';
+  upload.title = '点击选择本地图片，或直接把图片拖进此框';
+  upload.addEventListener('click', () => {
     const input = document.createElement('input');
-    input.type = 'text';
-    input.placeholder = 'https://... 图片直链';
-    const ok = document.createElement('button');
-    ok.type = 'button';
-    ok.className = 'slot-btn';
-    ok.textContent = '确定';
-    ok.addEventListener('click', () => {
-      const u = input.value.trim();
-      if (!/^https?:\/\/.+/i.test(u)) {
-        showToast('请输入有效的 http(s) 图片链接');
-        return;
-      }
-      setSlotValue(target, { kind: 'url', value: u });
+    input.type = 'file';
+    input.accept = 'image/png,image/jpeg,image/webp';
+    input.addEventListener('change', () => {
+      const f = input.files && input.files[0];
+      if (f) uploadSlotFile(f, target);
     });
-    const cancel = document.createElement('button');
-    cancel.type = 'button';
-    cancel.className = 'slot-btn';
-    cancel.textContent = '取消';
-    cancel.addEventListener('click', renderSlots);
-    row.appendChild(input);
-    row.appendChild(ok);
-    row.appendChild(cancel);
-    actions.replaceWith(row);
-    input.focus();
+    input.click();
   });
 
   actions.appendChild(pick);
-  actions.appendChild(paste);
+  actions.appendChild(upload);
   wrap.appendChild(actions);
   return wrap;
 }
@@ -887,6 +949,7 @@ function renderSlots() {
       const type = box.dataset.slot;
       box.innerHTML = '';
       box.appendChild(buildSlotInner({ type }, type === 'first' ? '首帧' : '尾帧'));
+      bindSlotDrop(box, { type });
     });
   }
 
@@ -899,13 +962,38 @@ function renderSlots() {
       const box = document.createElement('div');
       box.className = 'slot-box';
       box.appendChild(buildSlotInner({ type: 'ref', index: i }, `参考图 ${i + 1}`));
+      bindSlotDrop(box, { type: 'ref', index: i });
       list.appendChild(box);
     });
   }
 }
 
+let pickerFilter = '';
+
+function renderPickerFilterChips() {
+  const box = $('#picker-filter-chips');
+  box.hidden = pickerMode !== 'image';
+  if (box.hidden) return;
+  renderChips(
+    box,
+    [
+      { value: '', label: '全部' },
+      { value: 'character', label: '人物三视图' },
+      { value: 'scene', label: '场景图' },
+      { value: 'plain', label: '普通图' },
+    ],
+    pickerFilter,
+    (v) => {
+      pickerFilter = v;
+      renderPickerFilterChips();
+      renderPickerGrid();
+    }
+  );
+}
+
 function openPicker(target) {
   pickerTarget = target;
+  pickerFilter = '';
   setPickerMode('image');
   $('#picker-modal').hidden = false;
 }
@@ -917,6 +1005,7 @@ function setPickerMode(mode) {
   $('#picker-tab-image').setAttribute('aria-selected', String(mode === 'image'));
   $('#picker-tab-video').setAttribute('aria-selected', String(mode === 'video'));
   $('#picker-title').textContent = mode === 'image' ? '从生成结果选择图片' : '选择视频并提取尾帧';
+  renderPickerFilterChips();
   renderPickerGrid();
 }
 
@@ -970,14 +1059,19 @@ function renderPickerGrid() {
     return;
   }
 
-  if (!results.length) {
+  const pool = results.filter((item) =>
+    pickerFilter === '' ? true : pickerFilter === 'plain' ? !item.assetType : item.assetType === pickerFilter
+  );
+  if (!pool.length) {
     const empty = document.createElement('p');
     empty.className = 'picker-empty';
-    empty.textContent = '还没有可用的生成图片，请先在左侧生成图片';
+    empty.textContent = results.length
+      ? '该分类下还没有图片，换个分类或先去图片区生成'
+      : '还没有可用的生成图片，请先在左侧生成图片';
     grid.appendChild(empty);
     return;
   }
-  results.forEach((item) => {
+  pool.forEach((item) => {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'picker-item';
@@ -987,6 +1081,12 @@ function renderPickerGrid() {
     img.alt = '选择此图';
     img.src = item.file || (item.b64 ? `data:image/png;base64,${item.b64}` : `/api/image?url=${encodeURIComponent(item.url)}`);
     btn.appendChild(img);
+    const nameTag = document.createElement('span');
+    nameTag.className = 'picker-name';
+    const typePrefix = item.assetType === 'character' ? '三视图·' : item.assetType === 'scene' ? '场景·' : '';
+    nameTag.textContent = typePrefix + (item.name || (item.prompt || '').slice(0, 12));
+    nameTag.title = nameTag.textContent;
+    btn.appendChild(nameTag);
     btn.addEventListener('click', () => {
       const val = item.file
         ? { kind: 'file', value: item.file }
@@ -1054,20 +1154,12 @@ function setVideoGenerating(v) {
 
 async function generateVideo() {
   if (videoGenerating) return;
-  const apiKey = $('#video-key').value.trim();
   const prompt = $('#video-prompt').value.trim();
-  if (!apiKey) {
-    showVideoError('请先填写 Agnes API Key');
-    $('#video-key').focus();
-    return;
-  }
   if (!prompt) {
     showVideoError('请先填写视频提示词');
     $('#video-prompt').focus();
     return;
   }
-  state.videoKey = apiKey;
-  persist();
 
   let body;
   if (state.vmode === 'keyframe') {
@@ -1078,13 +1170,13 @@ async function generateVideo() {
       return;
     }
     body = {
-      apiKey,
       prompt,
       mode: 'keyframe',
       seconds: state.vseconds,
       size: state.vsize,
       firstFrame: ff,
       lastFrame: lf,
+      scriptId: activeScriptId(),
     };
   } else {
     const imgs = video.slots.refs.filter(Boolean);
@@ -1093,13 +1185,13 @@ async function generateVideo() {
       return;
     }
     body = {
-      apiKey,
       prompt,
       mode: 'reference',
       seconds: state.vseconds,
       size: state.vsize,
       aspectRatio: state.vratio,
       images: imgs,
+      scriptId: activeScriptId(),
     };
   }
 
@@ -1115,19 +1207,25 @@ async function generateVideo() {
     size: state.vsize,
     ratio: state.vmode === 'reference' ? state.vratio : null,
     prompt,
+    scriptId: activeScriptId(),
     createdAt: Date.now(),
   };
   video.results = [placeholder, ...video.results];
   renderVideoGallery();
 
   try {
-    const resp = await fetch('/api/video', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    const data = await resp.json().catch(() => ({}));
-    if (!resp.ok) throw new Error(data.error || `请求失败（HTTP ${resp.status}）`);
+    const { out: data, usedKey, notices } = await withKeyFailover('agnes', (key) =>
+      fetch('/api/video', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...body, apiKey: key }),
+      }).then(async (resp) => {
+        const d = await resp.json().catch(() => ({}));
+        if (!resp.ok) throw new Error(d.error || `请求失败（HTTP ${resp.status}）`);
+        return d;
+      })
+    );
+    notifyKeyFailover(notices, usedKey);
 
     video.results = video.results.filter((x) => x !== placeholder);
 
@@ -1139,6 +1237,7 @@ async function generateVideo() {
       item = { ...rec };
       video.results = [item, ...video.results];
     }
+    item.pollKey = usedKey.key; // 轮询沿用提交成功的密钥
     renderVideoGallery();
     if (item.taskId) startPolling(item);
   } catch (err) {
@@ -1160,6 +1259,8 @@ function startPolling(item) {
   item.polling = true;
   let tries = 0;
   const maxTries = 150; // 12 秒 × 150 ≈ 30 分钟
+  const pollKey = () =>
+    item.pollKey || (auth.user ? (keysForProvider('agnes')[0] || {}).key || '' : '');
   const timer = setInterval(async () => {
     tries += 1;
     if (tries > maxTries) {
@@ -1171,7 +1272,7 @@ function startPolling(item) {
     }
     try {
       const resp = await fetch(`/api/video/status/${encodeURIComponent(item.taskId)}`, {
-        headers: { 'X-Api-Key': state.videoKey.trim() || $('#video-key').value.trim() },
+        headers: { 'X-Api-Key': pollKey() },
       });
       const data = await resp.json().catch(() => ({}));
       if (data.status === 'done') {
@@ -1598,18 +1699,21 @@ function startHistorySync() {
 
 function setProvider(p) {
   state.provider = p;
-  $('#sensenova-model-field').hidden = p !== 'sensenova';
   $('#sensenova-size-field').hidden = p !== 'sensenova';
   $('#agnes-size-field').hidden = p !== 'agnes';
   $('#watermark-field').hidden = p !== 'sensenova';
-  $('#api-key').value = state.keys[p] || '';
-  $('#key-hint').textContent = PROVIDER_META[p].keyHint;
-  document.querySelectorAll('.provider-card').forEach((c) => {
-    const active = c.dataset.provider === p;
-    c.classList.toggle('active', active);
-    c.setAttribute('aria-pressed', String(active));
-  });
-  renderSavedKeySelect();
+  const sel = $('#model-select');
+  if (sel) sel.value = `${p}|${state.model[p]}`;
+  renderKeyStatuses();
+  persist();
+}
+
+/** 模型下拉切换：值格式 provider|model */
+function onModelSelectChange(e) {
+  const [provider, model] = String(e.target.value || '').split('|');
+  if (!PROVIDER_META[provider] || !model) return;
+  state.model[provider] = model;
+  setProvider(provider);
   persist();
 }
 
@@ -1617,6 +1721,85 @@ function setProvider(p) {
 
 function sanitizeFilename(name) {
   return String(name).replace(/[\\/:*?"<>|]+/g, '-');
+}
+
+/* ---- 生成类型选择 / 结果筛选 / 重命名 / 重新编辑 ---- */
+
+function renderAssetTypeChips() {
+  renderChips($('#asset-type-chips'), ASSET_TYPES, state.assetType, (v) => {
+    state.assetType = v;
+    renderAssetTypeChips();
+    persist();
+  });
+}
+
+let galleryFilter = '';
+
+function renderGalleryFilterChips() {
+  renderChips(
+    $('#gallery-filter-chips'),
+    [
+      { value: '', label: '全部' },
+      { value: 'character', label: '人物三视图' },
+      { value: 'scene', label: '场景图' },
+      { value: 'plain', label: '普通图' },
+    ],
+    galleryFilter,
+    (v) => {
+      galleryFilter = v;
+      renderGalleryFilterChips();
+      renderGallery();
+    }
+  );
+}
+
+async function renameItem(item) {
+  const name = window.prompt('给这张图片起个名字（视频选图时更易辨认，留空则清除）：', item.name || '');
+  if (name === null) return;
+  try {
+    const resp = await fetch('/api/history/rename', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: item.id, name }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.error || `请求失败（HTTP ${resp.status}）`);
+    item.name = data.record && data.record.name ? data.record.name : null;
+    renderGallery();
+    showToast(item.name ? `已重命名为「${item.name}」` : '已清除名称');
+  } catch (err) {
+    showToast(err.message || '重命名失败');
+  }
+}
+
+function editItem(item) {
+  $('#prompt').value = item.prompt || '';
+  state.assetType = item.assetType === 'character' || item.assetType === 'scene' ? item.assetType : '';
+  renderAssetTypeChips();
+  persist();
+  const ta = $('#prompt');
+  ta.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  ta.focus();
+  ta.setSelectionRange(ta.value.length, ta.value.length);
+  showToast('提示词已回填到左侧，修改后点击「立即生成」重新生成');
+}
+
+async function deleteItem(item) {
+  if (!confirm('确定删除这张图片？服务器上保存的图片文件也会一并删除')) return;
+  try {
+    const resp = await fetch('/api/history/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: item.id }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.error || `请求失败（HTTP ${resp.status}）`);
+    results = results.filter((r) => r.id !== item.id);
+    renderGallery();
+    showToast('已删除');
+  } catch (err) {
+    showToast(err.message || '删除失败');
+  }
 }
 
 function buildCard(item) {
@@ -1632,6 +1815,23 @@ function buildCard(item) {
   img.addEventListener('error', () => img.classList.add('broken'));
 
   const cap = document.createElement('figcaption');
+
+  const nameRow = document.createElement('p');
+  nameRow.className = 'img-name';
+  if (item.assetType) {
+    const typeTag = document.createElement('span');
+    typeTag.className = 'type-badge' + (item.assetType === 'character' ? ' t-character' : ' t-scene');
+    typeTag.textContent = ASSET_TYPE_LABEL[item.assetType];
+    nameRow.appendChild(typeTag);
+  }
+  const nameText = document.createElement('span');
+  nameText.className = 'img-name-text';
+  nameText.textContent = item.name || '未命名';
+  nameText.title = '点击重命名';
+  nameText.addEventListener('click', () => renameItem(item));
+  nameRow.appendChild(nameText);
+  cap.appendChild(nameRow);
+
   const spec = item.size || item.ratio || '';
   const time = new Date(item.createdAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
 
@@ -1654,6 +1854,28 @@ function buildCard(item) {
     '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg><span>下载</span>';
   dl.addEventListener('click', () => downloadItem(item));
   actions.appendChild(dl);
+
+  const edit = document.createElement('button');
+  edit.type = 'button';
+  edit.className = 'mini-btn';
+  edit.textContent = '重新编辑';
+  edit.title = '把这张图的提示词回填到左侧，修改后可重新生成';
+  edit.addEventListener('click', () => editItem(item));
+  actions.appendChild(edit);
+
+  const ren = document.createElement('button');
+  ren.type = 'button';
+  ren.className = 'mini-btn';
+  ren.textContent = '重命名';
+  ren.addEventListener('click', () => renameItem(item));
+  actions.appendChild(ren);
+
+  const del = document.createElement('button');
+  del.type = 'button';
+  del.className = 'mini-btn danger';
+  del.textContent = '删除';
+  del.addEventListener('click', () => deleteItem(item));
+  actions.appendChild(del);
 
   if (item.url) {
     const open = document.createElement('button');
@@ -1690,7 +1912,11 @@ function renderGallery() {
     }
   }
 
-  const visible = results.filter((item) => (item.scriptId || 'script-default') === activeScriptId());
+  const visible = results.filter(
+    (item) =>
+      (item.scriptId || 'script-default') === activeScriptId() &&
+      (galleryFilter === '' || (galleryFilter === 'plain' ? !item.assetType : item.assetType === galleryFilter))
+  );
   visible.forEach((item) => grid.appendChild(buildCard(item)));
   $('#empty-state').hidden = visible.length > 0 || generating;
   $('#result-count').textContent = visible.length ? `（${visible.length}）` : '';
@@ -1757,42 +1983,42 @@ function setGenerating(v) {
 
 async function generate() {
   if (generating) return;
-  const apiKey = $('#api-key').value.trim();
   const prompt = $('#prompt').value.trim();
-  if (!apiKey) {
-    showError('请先填写 API Key');
-    $('#api-key').focus();
-    return;
-  }
   if (!prompt) {
     showError('请先填写提示词');
     $('#prompt').focus();
     return;
   }
-  state.keys[state.provider] = apiKey;
-  persist();
 
   const isSense = state.provider === 'sensenova';
+  const assetType = state.assetType === 'character' || state.assetType === 'scene' ? state.assetType : '';
   const body = {
     provider: state.provider,
-    apiKey,
-    prompt,
+    prompt: wrapAssetPrompt(assetType, prompt),
+    rawPrompt: prompt,
+    assetType: assetType || undefined,
     model: state.model[state.provider],
     n: state.count,
     watermark: state.watermark,
     size: isSense ? state.size : state.agnesSize,
     ratio: state.ratio,
+    scriptId: activeScriptId(),
   };
 
   setGenerating(true);
   try {
-    const resp = await fetch('/api/generate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    const data = await resp.json().catch(() => ({}));
-    if (!resp.ok) throw new Error(data.error || `请求失败（HTTP ${resp.status}）`);
+    const { out: data, usedKey, notices } = await withKeyFailover(state.provider, (key) =>
+      fetch('/api/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...body, apiKey: key }),
+      }).then(async (resp) => {
+        const d = await resp.json().catch(() => ({}));
+        if (!resp.ok) throw new Error(d.error || `请求失败（HTTP ${resp.status}）`);
+        return d;
+      })
+    );
+    notifyKeyFailover(notices, usedKey);
 
     const recs = Array.isArray(data.records) ? data.records : [];
     if (recs.length) {
@@ -1807,6 +2033,41 @@ async function generate() {
     renderGallery();
   } finally {
     setGenerating(false);
+  }
+}
+
+/* ---------------- 提示词优化（prompt-optimizer MCP） ---------------- */
+
+/** 优化 textarea 中的提示词并回填；绑定在各「AI 优化」按钮上 */
+async function optimizeTextarea(ta, btn) {
+  const text = ta.value.trim();
+  if (!text) {
+    showToast('请先填写提示词再优化');
+    return;
+  }
+  const old = btn ? btn.textContent : '';
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '优化中…';
+  }
+  try {
+    const resp = await fetch('/api/optimize', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ prompt: text }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.error || `请求失败（HTTP ${resp.status}）`);
+    ta.value = data.optimized || text;
+    ta.dispatchEvent(new Event('change')); // 让故事镜头等监听 change 的逻辑自动保存
+    showToast('提示词已优化，可继续修改');
+  } catch (err) {
+    showToast(err.message || '优化失败，请稍后重试');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = old;
+    }
   }
 }
 
@@ -1830,10 +2091,6 @@ async function checkHealth() {
 
 function init() {
   loadPersisted();
-
-  document.querySelectorAll('.provider-card').forEach((card) => {
-    card.addEventListener('click', () => setProvider(card.dataset.provider));
-  });
 
   // 工作区切换
   document.querySelectorAll('.ws-tab').forEach((tab) => {
@@ -1859,24 +2116,25 @@ function init() {
     if (e.target === $('#auth-modal')) closeAuthModal();
   });
 
-  // 密钥管理
-  $('#manage-keys-btn').addEventListener('click', openKeysModal);
-  $('#keys-close').addEventListener('click', closeKeysModal);
-  $('#keys-modal').addEventListener('click', (e) => {
-    if (e.target === $('#keys-modal')) closeKeysModal();
+  // 账号与模型浮窗
+  $('#account-close').addEventListener('click', closeAccountModal);
+  $('#account-modal').addEventListener('click', (e) => {
+    if (e.target === $('#account-modal')) closeAccountModal();
   });
-  $('#add-key-form').addEventListener('submit', handleAddKey);
-  $('#saved-key-select').addEventListener('change', onSavedKeyChange);
+  $('#acct-tab-llm').addEventListener('click', () => setAccountTab('llm'));
+  $('#acct-tab-imgkey').addEventListener('click', () => setAccountTab('imgkey'));
+  $('#acct-tab-vidkey').addEventListener('click', () => setAccountTab('vidkey'));
+  $('#acct-imgkey-form').addEventListener('submit', handleAcctImgKeySubmit);
+  $('#acct-vidkey-form').addEventListener('submit', handleAcctVidKeySubmit);
+  $('#img-account-btn').addEventListener('click', () => openAccountModal('imgkey'));
+  $('#video-account-btn').addEventListener('click', () => openAccountModal('vidkey'));
 
-  // Key 输入
-  $('#toggle-key').addEventListener('click', () => {
-    const input = $('#api-key');
-    input.type = input.type === 'password' ? 'text' : 'password';
-  });
-  $('#api-key').addEventListener('input', (e) => {
-    state.keys[state.provider] = e.target.value;
-    persist();
-  });
+  // 生成模型选择
+  $('#model-select').addEventListener('change', onModelSelectChange);
+
+  // AI 提示词优化
+  $('#prompt-optimize-btn').addEventListener('click', (e) => optimizeTextarea($('#prompt'), e.currentTarget));
+  $('#video-optimize-btn').addEventListener('click', (e) => optimizeTextarea($('#video-prompt'), e.currentTarget));
 
   // 尺寸与选项
   $('#size-input').value = state.size;
@@ -1910,15 +2168,6 @@ function init() {
   // 视频生成
   $('#vtab-reference').addEventListener('click', () => setVideoMode('reference'));
   $('#vtab-keyframe').addEventListener('click', () => setVideoMode('keyframe'));
-  $('#toggle-video-key').addEventListener('click', () => {
-    const input = $('#video-key');
-    input.type = input.type === 'password' ? 'text' : 'password';
-  });
-  $('#video-key').addEventListener('input', (e) => {
-    state.videoKey = e.target.value;
-    persist();
-  });
-  $('#video-key-select').addEventListener('change', onVideoKeyChange);
   $('#video-generate-btn').addEventListener('click', generateVideo);
   $('#video-clear-btn').addEventListener('click', async () => {
     if (video.results.length && !confirm('确定清空全部视频记录？服务器上保存的视频文件也会一并删除')) return;
@@ -1966,7 +2215,7 @@ function init() {
     if (e.key === 'Escape') {
       closeLightbox();
       closeAuthModal();
-      closeKeysModal();
+      closeAccountModal();
       closePicker();
     }
   });
@@ -2003,13 +2252,13 @@ function init() {
   });
 
   setProvider(state.provider);
-  renderModelChips();
   renderSizePresets();
   renderAgnesChips();
   renderCountChips();
   renderVideoChips();
-  $('#video-key').value = state.videoKey || '';
   setVideoMode(state.vmode);
+  renderAssetTypeChips();
+  renderGalleryFilterChips();
   renderGallery();
   renderVideoGallery();
   checkHealth();

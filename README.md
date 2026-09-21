@@ -26,8 +26,12 @@
 5. **成片合成**：将多个片段按顺序拼接成片（ffmpeg），支持 720P / 1080P
 
 ### 其他
-- 账户系统：注册/登录（scrypt 加盐哈希），登录后自动填充账户保存的多把 API Key（按服务商分组、掩码显示）
-- 文本模型配置：支持配置多个 OpenAI 兼容接口（DeepSeek / GLM / Kimi 等）用于分镜拆解
+- **账号中心化密钥管理**：点击右上角账号打开浮窗，统一管理文本模型（多套 OpenAI 兼容配置）、图片 Key（商汤 / Agnes）、视频 Key（Agnes）
+- **多 Key 自动故障转移**：同一服务商可保存多把 Key，某把被限流 / 额度不足 / 失效时自动切换下一把，切换过程有提示，全部失败时汇总各把 Key 的具体错误
+- 文本模型配置：支持配置多个 OpenAI 兼容接口（DeepSeek / GLM / Kimi 等）用于分镜拆解，多配置自动轮询
+- **本地图片上传**：参考图 / 首尾帧槽位支持拖拽或点选上传本地图片
+- **结果管理**：生成结果按类型（人物三视图 / 场景图 / 普通图）筛选，支持重命名、单张删除、重新编辑回填
+- **AI 提示词优化**：一键调用 [prompt-optimizer](https://github.com/linshenkx/prompt-optimizer) 优化当前提示词（图片 / 视频 / 镜头提示词均可）
 - **InkOS 对接**：检测到本地 [InkOS](https://github.com/czstudio/inkos_studio) 服务后，可在书架中直接选书选章，一键拉取章节正文与角色矩阵（用于人物一致性）
 
 ## 快速开始
@@ -58,7 +62,9 @@ npm start
 | 变量 | 默认值 | 说明 |
 |---|---|---|
 | `PORT` | `3000` | 服务监听端口 |
-| `INKOS_BASE` | `http://127.0.0.1:4567` | InkOS 服务地址（不部署 InkOS 可忽略，书架会显示未连接） |
+| `INKOS_BASE` | `http://127.0.0.1:4567` | InkOS 服务地址；不设置时按候选列表自动探测（回环 → docker 网关 → host.docker.internal） |
+| `OPTIMIZER_URL` | `http://127.0.0.1:28081` | prompt-optimizer 服务地址（用于 AI 提示词优化，不部署可忽略） |
+| `OPTIMIZER_USER` / `OPTIMIZER_PASS` | `admin` / `123456` | prompt-optimizer 的访问账号与密码（其 `ACCESS_USERNAME` / `ACCESS_PASSWORD`） |
 
 ## API Key 获取
 
@@ -95,6 +101,27 @@ Windows：从 [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) 下载 essentials 
 
 若 InkOS 不在默认地址，设置环境变量 `INKOS_BASE` 即可。
 
+## 提示词优化对接（可选）
+
+部署 [prompt-optimizer](https://github.com/linshenkx/prompt-optimizer)（Docker 一体化镜像，内置 MCP 服务）后，图片提示词、视频提示词、镜头提示词旁会出现「AI 优化」按钮，一键将简单描述扩写为专业提示词：
+
+```bash
+docker run -d -p 28081:80 \
+  -e ACCESS_USERNAME=admin \
+  -e ACCESS_PASSWORD=你的密码 \
+  -e MCP_DEFAULT_MODEL_PROVIDER=custom \
+  -e VITE_CUSTOM_API_KEY=你的文本模型Key \
+  -e VITE_CUSTOM_API_BASE_URL=https://api.deepseek.com/v1 \
+  -e VITE_CUSTOM_API_MODEL=deepseek-chat \
+  --restart unless-stopped \
+  --name prompt-optimizer \
+  linshen/prompt-optimizer
+```
+
+优化动作消耗该文本模型的额度（每次优化约一次 LLM 调用）。不在默认地址时设置 `OPTIMIZER_URL` / `OPTIMIZER_USER` / `OPTIMIZER_PASS`。
+
+> 高级：所有环境变量也可以通过 `data/config.json`（键值对形式，如 `{"OPTIMIZER_URL": "http://192.168.1.10:28081"}`）覆盖，适合不方便设置容器环境变量的部署。该文件在 `data/` 下，不会被提交到仓库。
+
 ## 安全须知
 
 - `data/db.json` 中 API Key 与文本模型 Key **明文存储**（服务端调用模型时需要使用），请确保服务器本身可信
@@ -122,6 +149,21 @@ Windows：从 [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) 下载 essentials 
 ```bash
 docker compose up -d --build
 ```
+
+## 更新日志
+
+### v2.0.0
+- 账号中心化：模型与密钥管理统一收进账号浮窗（文本模型 / 图片 Key / 视频 Key），各工作区改为下拉选择
+- 多 Key 自动故障转移：同一服务商多把密钥限流自动切换，全失败时汇总错误；密钥健康徽标
+- 故事工坊「三步出片」重构：角色三视图 → 场景图 → 逐镜头视频（场景切换用参考图模式、场景延续用尾帧衔接），镜头带出场角色与场景归属
+- InkOS 深度对接：书架选书选章、一键拉取正文与角色矩阵、角色提取以矩阵为准
+- 图片区升级：生成类型（人物三视图 / 场景图）、结果分类筛选、重命名、单张删除、重新编辑回填、本地图拖拽上传
+- AI 提示词优化：对接 prompt-optimizer（MCP），一键扩写专业提示词
+- 历史记录改为只增不减（不再自动删除），支持按剧本隔离
+- 修复：密钥管理弹窗清空时文件未真正删除；生成记录剧本归属缺失导致结果不显示
+
+### v1.0.0
+- 首个开源版本：文生图、图生视频、故事分镜、成片合成、账户系统
 
 ## License
 

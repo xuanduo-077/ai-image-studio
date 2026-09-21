@@ -43,41 +43,28 @@
           <button type="button" class="slot-btn" id="image-script-del" title="删除当前剧本">删</button>
         </div>
         <section class="field">
-          <label class="field-label" id="provider-label">模型服务商</label>
-          <div class="provider-grid" id="provider-grid" role="group" aria-labelledby="provider-label">
-            <button type="button" class="provider-card" data-provider="sensenova" aria-pressed="false">
-              <span class="provider-name">商汤 SenseNova</span>
-              <span class="provider-model">u1-fast · u1.5-lite</span>
-            </button>
-            <button type="button" class="provider-card" data-provider="agnes" aria-pressed="false">
-              <span class="provider-name">Agnes AI</span>
-              <span class="provider-model">agnes-image-2.5-flash</span>
-            </button>
-          </div>
-        </section>
-
-        <section class="field" id="sensenova-model-field">
-          <label class="field-label" id="model-label">模型</label>
-          <div class="chips" id="model-chips" role="group" aria-labelledby="model-label"></div>
+          <label class="field-label" for="model-select">生成模型</label>
+          <select id="model-select" aria-label="选择生成模型">
+            <option value="sensenova|sensenova-u1-fast">商汤 SenseNova · u1-fast</option>
+            <option value="sensenova|sensenova-u1.5-lite">商汤 SenseNova · u1.5-lite</option>
+            <option value="agnes|agnes-image-2.5-flash">Agnes AI · agnes-image-2.5-flash</option>
+          </select>
         </section>
 
         <section class="field">
-          <label class="field-label" for="api-key">API Key</label>
-          <div class="saved-keys-row" id="saved-keys-row" hidden>
-            <select id="saved-key-select" aria-label="选择已保存的密钥"></select>
-            <button type="button" class="ghost-btn" id="manage-keys-btn">管理</button>
+          <label class="field-label">生成密钥</label>
+          <div class="key-status-row">
+            <span class="hint" id="img-key-status">未登录或未保存密钥</span>
+            <button type="button" class="ghost-btn" id="img-account-btn">账号管理</button>
           </div>
-          <div class="key-row">
-            <input id="api-key" type="password" placeholder="粘贴 API Key" autocomplete="off" spellcheck="false" />
-            <button type="button" class="ghost-btn icon-btn" id="toggle-key" aria-label="显示或隐藏 API Key">
-              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>
-            </button>
-          </div>
-          <p class="hint" id="key-hint"></p>
+          <p class="hint">在「账号」浮窗中添加商汤 / Agnes Key；同一模型可加多把，被限流时自动切换下一把</p>
         </section>
 
         <section class="field">
-          <label class="field-label" for="prompt">提示词 Prompt</label>
+          <div class="field-label-row">
+            <label class="field-label" for="prompt">提示词 Prompt</label>
+            <button type="button" class="ghost-btn" id="prompt-optimize-btn" title="调用 prompt-optimizer 优化当前提示词">AI 优化</button>
+          </div>
           <div class="tpl-row">
             <select id="prompt-template" aria-label="提示词模板">
               <option value="">从模板库填入（替换 [ ] 内变量）…</option>
@@ -112,6 +99,12 @@
           </label>
         </section>
 
+        <section class="field" id="asset-type-field">
+          <label class="field-label" id="asset-type-label">生成类型</label>
+          <div class="chips" id="asset-type-chips" role="group" aria-labelledby="asset-type-label"></div>
+          <p class="hint">选「人物三视图 / 场景图」会自动套用对应模板强化提示词，生成结果将分类展示，方便视频区挑参考图</p>
+        </section>
+
         <button type="button" class="btn-primary" id="generate-btn">立即生成</button>
         <div class="error-box" id="error-box" role="alert" hidden></div>
       </aside>
@@ -121,6 +114,9 @@
         <div class="gallery-head">
           <h2>生成结果<span id="result-count"></span></h2>
           <button type="button" class="ghost-btn" id="clear-btn">清空</button>
+        </div>
+        <div class="gallery-filter-row">
+          <div class="chips" id="gallery-filter-chips" role="group" aria-label="按类型筛选生成结果"></div>
         </div>
         <div class="gallery-grid" id="gallery-grid"></div>
         <div class="empty-state" id="empty-state">
@@ -156,20 +152,19 @@
         </section>
 
         <section class="field">
-          <label class="field-label" for="video-key">Agnes API Key</label>
-          <div class="saved-keys-row" id="video-keys-row" hidden>
-            <select id="video-key-select" aria-label="选择已保存的 Agnes 密钥"></select>
+          <label class="field-label">Agnes 密钥</label>
+          <div class="key-status-row">
+            <span class="hint" id="video-key-status">未登录或未保存密钥</span>
+            <button type="button" class="ghost-btn" id="video-account-btn">账号管理</button>
           </div>
-          <div class="key-row">
-            <input id="video-key" type="password" placeholder="粘贴 Agnes API Key" autocomplete="off" spellcheck="false" />
-            <button type="button" class="ghost-btn icon-btn" id="toggle-video-key" aria-label="显示或隐藏视频 API Key">
-              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>
-            </button>
-          </div>
+          <p class="hint">使用「账号」中保存的 Agnes 密钥（视频模型 agnes-video-2.5-flash），与图片区 Agnes 密钥通用，被限流时自动切换</p>
         </section>
 
         <section class="field">
-          <label class="field-label" for="video-prompt">视频提示词</label>
+          <div class="field-label-row">
+            <label class="field-label" for="video-prompt">视频提示词</label>
+            <button type="button" class="ghost-btn" id="video-optimize-btn" title="调用 prompt-optimizer 优化当前提示词">AI 优化</button>
+          </div>
           <textarea id="video-prompt" rows="3" placeholder="参考模式可用 <Picture 1> 指代第一张参考图，例如：以 <Picture 1> 中的角色为主角，在花田中自然奔跑，保持外观一致"></textarea>
         </section>
 
@@ -244,22 +239,11 @@
         <aside class="panel story-side" aria-label="故事改编">
           <section class="field">
             <div class="field-label-row">
-              <label class="field-label">文本模型</label>
-              <button type="button" class="ghost-btn" id="llm-add-btn">新增配置</button>
+              <label class="field-label" for="llm-active-select">文本模型</label>
+              <button type="button" class="ghost-btn" id="llm-manage-btn">账号管理</button>
             </div>
-            <div id="llm-config-list" class="llm-list"></div>
-            <div id="llm-form" class="llm-form" hidden>
-              <input id="llm-name" type="text" placeholder="配置名称，如 Kimi 主力" maxlength="40" />
-              <input id="llm-base-url" type="text" placeholder="连接地址，如 https://api.deepseek.com/v1" spellcheck="false" />
-              <input id="llm-model" type="text" placeholder="模型名称，如 deepseek-chat" spellcheck="false" />
-              <input id="llm-key" type="password" placeholder="API Key（编辑时留空则不修改）" autocomplete="off" />
-              <div class="llm-form-actions">
-                <button type="button" class="ghost-btn" id="llm-test-btn">测试连接</button>
-                <button type="button" class="mini-btn primary" id="llm-save-btn">保存</button>
-                <button type="button" class="ghost-btn" id="llm-cancel-btn">取消</button>
-              </div>
-            </div>
-            <p class="hint" id="llm-hint">OpenAI 兼容接口，地址填到 /v1 为止。配置保存在登录账户中，分镜拆解与 InkOS 可共用。</p>
+            <select id="llm-active-select" aria-label="选择文本模型配置"></select>
+            <p class="hint">点击「账号管理」添加/编辑文本模型（名称、地址、模型、Key），分镜失败时自动轮询切换</p>
           </section>
 
           <section class="field">
@@ -335,19 +319,6 @@
             <span class="story-progress" id="story-progress"></span>
           </div>
 
-          <div class="story-keys">
-            <div class="story-key-item">
-              <label for="story-sensenova-key">图片 Key（商汤）</label>
-              <select id="story-sensenova-key-select" aria-label="选择商汤密钥"></select>
-              <input id="story-sensenova-key" type="password" placeholder="粘贴商汤 API Key" autocomplete="off" spellcheck="false" hidden />
-            </div>
-            <div class="story-key-item">
-              <label for="story-agnes-key">视频 Key（Agnes）</label>
-              <select id="story-agnes-key-select" aria-label="选择 Agnes 密钥"></select>
-              <input id="story-agnes-key" type="password" placeholder="粘贴 Agnes API Key" autocomplete="off" spellcheck="false" hidden />
-            </div>
-          </div>
-
           <div class="tab-pane" id="pane-characters">
             <div class="asset-grid" id="char-grid"></div>
             <div class="empty-state" id="char-empty" hidden>
@@ -404,26 +375,76 @@
     </div>
   </div>
 
-  <!-- 密钥管理弹窗 -->
-  <div class="modal-mask" id="keys-modal" hidden>
-    <div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="keys-title">
+  <!-- 账号与模型浮窗 -->
+  <div class="modal-mask" id="account-modal" hidden>
+    <div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="account-title">
       <div class="modal-head">
-        <h3 id="keys-title">密钥管理</h3>
-        <button type="button" class="modal-close" id="keys-close" aria-label="关闭">
+        <h3 id="account-title">账号与模型管理</h3>
+        <button type="button" class="modal-close" id="account-close" aria-label="关闭">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>
         </button>
       </div>
-      <div class="key-list" id="key-list"></div>
-      <form class="add-key-form" id="add-key-form" novalidate>
-        <h4>添加密钥</h4>
-        <div class="add-key-grid">
-          <select id="new-key-provider" aria-label="服务商"></select>
-          <input id="new-key-name" type="text" placeholder="备注名（可选）" maxlength="40" />
-          <input id="new-key-value" type="password" placeholder="粘贴 API Key" autocomplete="off" spellcheck="false" class="span-2" />
+      <div class="tab-row" role="tablist" aria-label="账号管理分区">
+        <button type="button" class="tab active" id="acct-tab-llm" aria-selected="true">文本模型</button>
+        <button type="button" class="tab" id="acct-tab-imgkey" aria-selected="false">图片 Key</button>
+        <button type="button" class="tab" id="acct-tab-vidkey" aria-selected="false">视频 Key</button>
+      </div>
+
+      <div class="acct-pane" id="acct-pane-llm">
+        <div class="field-label-row">
+          <label class="field-label">文本模型配置（故事工坊分镜拆解用）</label>
+          <button type="button" class="ghost-btn" id="llm-add-btn">新增配置</button>
         </div>
-        <div class="error-box" id="key-error" role="alert" hidden></div>
-        <button type="submit" class="btn-secondary">保存密钥</button>
-      </form>
+        <div id="llm-config-list" class="llm-list"></div>
+        <div id="llm-form" class="llm-form" hidden>
+          <input id="llm-name" type="text" placeholder="配置名称，如 Kimi 主力" maxlength="40" />
+          <input id="llm-base-url" type="text" placeholder="连接地址，如 https://api.deepseek.com/v1" spellcheck="false" />
+          <input id="llm-model" type="text" placeholder="模型名称，如 deepseek-chat" spellcheck="false" />
+          <input id="llm-key" type="password" placeholder="API Key（编辑时留空则不修改）" autocomplete="off" />
+          <div class="llm-form-actions">
+            <button type="button" class="ghost-btn" id="llm-test-btn">测试连接</button>
+            <button type="button" class="mini-btn primary" id="llm-save-btn">保存</button>
+            <button type="button" class="ghost-btn" id="llm-cancel-btn">取消</button>
+          </div>
+        </div>
+        <p class="hint">OpenAI 兼容接口，地址填到 /v1 为止。分镜拆解失败时会在多个配置间自动轮询切换。</p>
+      </div>
+
+      <div class="acct-pane" id="acct-pane-imgkey" hidden>
+        <h4 class="acct-sub">商汤 SenseNova（图片生成）</h4>
+        <div class="key-list" id="acct-key-list-sensenova"></div>
+        <h4 class="acct-sub gap-top">Agnes AI（图片生成）</h4>
+        <div class="key-list" id="acct-key-list-agnes"></div>
+        <form class="add-key-form" id="acct-imgkey-form" novalidate>
+          <h4>添加图片密钥</h4>
+          <div class="add-key-grid">
+            <select id="acct-imgkey-provider" aria-label="密钥服务商">
+              <option value="sensenova">商汤 SenseNova</option>
+              <option value="agnes">Agnes AI</option>
+            </select>
+            <input id="acct-imgkey-name" type="text" placeholder="备注名，如 主力 / 备用1" maxlength="40" />
+            <input id="acct-imgkey-value" type="password" placeholder="粘贴 API Key" autocomplete="off" spellcheck="false" class="span-2" />
+          </div>
+          <div class="error-box" id="acct-imgkey-error" role="alert" hidden></div>
+          <button type="submit" class="btn-secondary">保存密钥</button>
+        </form>
+        <p class="hint">同一服务商可添加多把密钥：生成时按顺序使用，一把被限流自动切下一把。</p>
+      </div>
+
+      <div class="acct-pane" id="acct-pane-vidkey" hidden>
+        <h4 class="acct-sub">Agnes AI（视频生成 · agnes-video-2.5-flash）</h4>
+        <p class="hint">视频与图片共用 Agnes 密钥池：此处添加的密钥同时用于图片与视频，被限流时自动切换。</p>
+        <div class="key-list" id="acct-key-list-video"></div>
+        <form class="add-key-form" id="acct-vidkey-form" novalidate>
+          <h4>添加视频密钥（Agnes）</h4>
+          <div class="add-key-grid">
+            <input id="acct-vidkey-name" type="text" placeholder="备注名，如 主力 / 备用1" maxlength="40" />
+            <input id="acct-vidkey-value" type="password" placeholder="粘贴 Agnes API Key" autocomplete="off" spellcheck="false" class="span-2" />
+          </div>
+          <div class="error-box" id="acct-vidkey-error" role="alert" hidden></div>
+          <button type="submit" class="btn-secondary">保存密钥</button>
+        </form>
+      </div>
     </div>
   </div>
 
@@ -453,6 +474,7 @@
         <button type="button" class="tab active" id="picker-tab-image" aria-selected="true">生成图片</button>
         <button type="button" class="tab" id="picker-tab-video" aria-selected="false">视频尾帧</button>
       </div>
+      <div class="chips picker-filter-row" id="picker-filter-chips" role="group" aria-label="按类型筛选生成图片" hidden></div>
       <div class="picker-grid" id="picker-grid"></div>
     </div>
   </div>
