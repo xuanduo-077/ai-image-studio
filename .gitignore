@@ -3,3 +3,4 @@ data/
 .codebuddy/
 *.log
 .DS_Store
+.mcp.json
