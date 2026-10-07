@@ -30,6 +30,7 @@ const PROVIDERS = {
   sensenova: {
     label: '商汤 SenseNova',
     endpoint: 'https://token.sensenova.cn/v1/images/generations',
+    editsEndpoint: 'https://token.sensenova.cn/v1/images/edits',
     defaultModel: 'sensenova-u1-fast',
     maxImages: 4,
   },
@@ -622,12 +623,12 @@ function extractImages(payload) {
   return images;
 }
 
-async function callImageApi(provider, apiKey, payload) {
+async function callImageApi(provider, apiKey, payload, endpoint) {
   const conf = PROVIDERS[provider];
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
-    const resp = await fetch(conf.endpoint, {
+    const resp = await fetch(endpoint || conf.endpoint, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -689,16 +690,44 @@ app.post('/api/generate', async (req, res) => {
       return res.status(400).json({ error: `图像尺寸格式不正确：${rawSize}，应为 宽x高（如 2752x1536）` });
     }
     pixelSize = `${match[1]}x${match[2]}`;
-    for (let i = 0; i < count; i++) {
-      tasks.push(
-        callImageApi('sensenova', apiKey.trim(), {
-          model: useModel,
-          prompt: promptText,
-          size: pixelSize,
-          n: 1,
-          watermark: watermark === true,
-        })
-      );
+    // 图生图：参考图走 /v1/images/edits 接口（仅 sensenova-u1.5-lite 支持）
+    const refs = (Array.isArray(referenceImages) ? referenceImages : [])
+      .map(normalizeFrame)
+      .filter(Boolean)
+      .slice(0, 3);
+    if (refs.length) {
+      if (useModel !== 'sensenova-u1.5-lite') {
+        return res.status(400).json({ error: '商汤图生图仅支持 sensenova-u1.5-lite 模型，请在「生成模型」中切换后重试' });
+      }
+      // edits 接口尺寸要求：宽高为 32 的倍数，512~4096；不满足时用 auto 自动适配主图
+      const w = Number(match[1]);
+      const h = Number(match[2]);
+      const sizeOk = w % 32 === 0 && h % 32 === 0 && w >= 512 && w <= 4096 && h >= 512 && h <= 4096;
+      const editSize = sizeOk ? pixelSize : 'auto';
+      for (let i = 0; i < count; i++) {
+        tasks.push(
+          callImageApi('sensenova', apiKey.trim(), {
+            model: useModel,
+            prompt: promptText,
+            images: refs.map((u) => ({ image_url: u })),
+            n: 1,
+            size: editSize,
+            watermark: watermark === true,
+          }, PROVIDERS.sensenova.editsEndpoint)
+        );
+      }
+    } else {
+      for (let i = 0; i < count; i++) {
+        tasks.push(
+          callImageApi('sensenova', apiKey.trim(), {
+            model: useModel,
+            prompt: promptText,
+            size: pixelSize,
+            n: 1,
+            watermark: watermark === true,
+          })
+        );
+      }
     }
   } else {
     // Agnes：支持图生图/多图合成（extra_body.image 数组，URL 或 data URL，最多 3 张）

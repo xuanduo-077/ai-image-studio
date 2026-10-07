@@ -104,6 +104,10 @@ const video = {
   results: [],
 };
 
+/* 图片区图生图参考图槽位（最多 3 张，第一张为主编辑图） */
+const IMG_REF_MAX = 3;
+let imgRefs = new Array(IMG_REF_MAX).fill(null);
+
 let videoGenerating = false;
 let pickerTarget = null;
 
@@ -793,11 +797,13 @@ function slotSrc(val) {
 }
 
 function getSlotValue(target) {
+  if (target.type === 'imgref') return imgRefs[target.index];
   return target.type === 'ref' ? video.slots.refs[target.index] : video.slots[target.type];
 }
 
 function setSlotValue(target, val) {
-  if (target.type === 'ref') video.slots.refs[target.index] = val;
+  if (target.type === 'imgref') imgRefs[target.index] = val;
+  else if (target.type === 'ref') video.slots.refs[target.index] = val;
   else video.slots[target.type] = val;
   renderSlots();
 }
@@ -964,6 +970,19 @@ function renderSlots() {
       box.appendChild(buildSlotInner({ type: 'ref', index: i }, `参考图 ${i + 1}`));
       bindSlotDrop(box, { type: 'ref', index: i });
       list.appendChild(box);
+    });
+  }
+
+  // 图片区图生图参考图槽位
+  const imgRefList = $('#img-ref-slots');
+  if (imgRefList) {
+    imgRefList.innerHTML = '';
+    imgRefs.forEach((_, i) => {
+      const box = document.createElement('div');
+      box.className = 'slot-box';
+      box.appendChild(buildSlotInner({ type: 'imgref', index: i }, i === 0 ? '参考图 1（主图）' : `参考图 ${i + 1}`));
+      bindSlotDrop(box, { type: 'imgref', index: i });
+      imgRefList.appendChild(box);
     });
   }
 }
@@ -1991,6 +2010,11 @@ async function generate() {
   }
 
   const isSense = state.provider === 'sensenova';
+  const imgRefsUsed = imgRefs.filter(Boolean);
+  if (isSense && imgRefsUsed.length && state.model.sensenova !== 'sensenova-u1.5-lite') {
+    showError('商汤图生图仅支持 sensenova-u1.5-lite 模型，请先在「生成模型」中切换');
+    return;
+  }
   const assetType = state.assetType === 'character' || state.assetType === 'scene' ? state.assetType : '';
   const body = {
     provider: state.provider,
@@ -2004,6 +2028,7 @@ async function generate() {
     ratio: state.ratio,
     scriptId: activeScriptId(),
   };
+  if (imgRefsUsed.length) body.referenceImages = imgRefsUsed;
 
   setGenerating(true);
   try {

@@ -105,6 +105,12 @@
           <p class="hint">选「人物三视图 / 场景图」会自动套用对应模板强化提示词，生成结果将分类展示，方便视频区挑参考图</p>
         </section>
 
+        <section class="field" id="img-ref-field">
+          <label class="field-label">参考图（图生图，最多 3 张）</label>
+          <div id="img-ref-slots" class="slot-list"></div>
+          <p class="hint">第一张为主编辑图。商汤需选择 u1.5-lite 模型，Agnes 直接可用；留空则按普通文生图处理。支持上传本地图片、拖拽进框或从生成结果选取</p>
+        </section>
+
         <button type="button" class="btn-primary" id="generate-btn">立即生成</button>
         <div class="error-box" id="error-box" role="alert" hidden></div>
       </aside>
