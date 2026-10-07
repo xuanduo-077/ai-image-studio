@@ -788,6 +788,18 @@ async function handleAcctVidKeySubmit(e) {
 
 /* ---------------- 视频生成 ---------------- */
 
+/** 把 Agnes 平台侧报错翻译成用户可行动的提示 */
+function friendlyVideoError(msg) {
+  const s = String(msg || '');
+  if (/队列已满/.test(s)) {
+    return 'Agnes 平台视频队列已满（高峰期限流，与你的部署无关）：请 10-30 分钟后重试，或降低压力（480P、更短时长）；若账号浮窗中有多把不同账号的密钥，也可调整顺序换号重试';
+  }
+  if (/余额|额度|insufficient|quota/i.test(s)) {
+    return 'Agnes 账户额度不足：请充值，或在账号浮窗中更换其他密钥';
+  }
+  return s;
+}
+
 function slotSrc(val) {
   if (!val) return '';
   if (val.kind === 'file') return val.value;
@@ -1260,7 +1272,7 @@ async function generateVideo() {
     renderVideoGallery();
     if (item.taskId) startPolling(item);
   } catch (err) {
-    const msg = err.message || '视频生成失败，请稍后重试';
+    const msg = friendlyVideoError(err.message || '视频生成失败，请稍后重试');
     const target = video.results.find((x) => x === placeholder);
     if (target) {
       target.status = 'failed';
@@ -1306,7 +1318,7 @@ function startPolling(item) {
       } else if (data.status === 'failed') {
         clearInterval(timer);
         item.status = 'failed';
-        item.error = data.error || '视频生成失败';
+        item.error = friendlyVideoError(data.error || '视频生成失败');
         renderVideoGallery();
       }
     } catch {

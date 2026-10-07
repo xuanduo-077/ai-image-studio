@@ -1552,7 +1552,7 @@ function startShotPolling(shot, i) {
       } else if (data.status === 'failed') {
         clearInterval(timer);
         shot.status = 'failed';
-        shot.error = data.error || '视频生成失败';
+        shot.error = friendlyVideoError(data.error || '视频生成失败');
         await saveShotNow(i);
         renderShots();
       }
