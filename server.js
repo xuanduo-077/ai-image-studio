@@ -983,7 +983,7 @@ async function callVideoApi(apiKey, payload) {
 }
 
 app.post('/api/video', async (req, res) => {
-  const { apiKey, prompt, mode, seconds, size, aspectRatio, firstFrame, lastFrame, images, meta, scriptId } = req.body || {};
+  const { apiKey, prompt, mode, seconds, size, aspectRatio, firstFrame, lastFrame, images, meta, scriptId, candidateKeys } = req.body || {};
   if (!apiKey || typeof apiKey !== 'string' || !apiKey.trim()) {
     return res.status(400).json({ error: '请先填写 Agnes API Key' });
   }
@@ -1040,28 +1040,56 @@ app.post('/api/video', async (req, res) => {
   addHistoryRecords([rec]);
   res.json({ record: rec });
 
-  const submitKey = apiKey.trim();
+  // 异步提交：队列已满/限流时自动换 Key 并退避重试（约 2/4/7 分钟），重试期间记录保持 pending
+  const submitKeys = [...new Set([String(apiKey || '').trim(), ...(Array.isArray(candidateKeys) ? candidateKeys : [])])]
+    .map((k) => String(k || '').trim())
+    .filter(Boolean)
+    .slice(0, 5);
+  const RETRYABLE_SUBMIT = /队列已满|稍后重试|rate.?limit|too many|429/i;
+  const submitDelays = [0, 120000, 240000, 420000];
   (async () => {
-    try {
-      const result = await callVideoApi(submitKey, payload);
-      if (result.videos && result.videos.length) {
-        const v = result.videos[0];
-        const patch = { status: 'done', url: v.url || null };
-        try {
-          if (v.url) patch.file = await saveDataFromUrl(v.url, `vid-agnes-${Date.now()}`, 'mp4');
-          else if (v.b64) patch.file = saveDataFromB64(v.b64, `vid-agnes-${Date.now()}`);
-        } catch (e) {
-          /* 下载失败保留原链展示 */
-        }
-        updateVideoRecord(rec.id, patch);
-      } else if (result.taskId) {
-        updateVideoRecord(rec.id, { status: 'pending', taskId: result.taskId });
-      } else {
-        updateVideoRecord(rec.id, { status: 'failed', error: '接口未返回任务信息' });
+    let lastErr = null;
+    for (let round = 0; round < submitDelays.length; round++) {
+      if (submitDelays[round]) {
+        updateVideoRecord(rec.id, {
+          status: 'pending',
+          taskId: null,
+          stage: `Agnes 队列已满，约 ${Math.round(submitDelays[round] / 60000)} 分钟后自动重试（第 ${round}/${submitDelays.length - 1} 轮，轮换密钥）`,
+        });
+        await new Promise((r) => setTimeout(r, submitDelays[round]));
       }
-    } catch (err) {
-      updateVideoRecord(rec.id, { status: 'failed', error: (err && err.message) || '视频生成失败' });
+      const keyForAttempt = submitKeys[round % submitKeys.length];
+      try {
+        const result = await callVideoApi(keyForAttempt, payload);
+        if (result.videos && result.videos.length) {
+          const v = result.videos[0];
+          const patch = { status: 'done', url: v.url || null, pollKey: keyForAttempt, stage: null };
+          try {
+            if (v.url) patch.file = await saveDataFromUrl(v.url, `vid-agnes-${Date.now()}`, 'mp4');
+            else if (v.b64) patch.file = saveDataFromB64(v.b64, `vid-agnes-${Date.now()}`);
+          } catch (e) {
+            /* 下载失败保留原链展示 */
+          }
+          updateVideoRecord(rec.id, patch);
+        } else if (result.taskId) {
+          updateVideoRecord(rec.id, { status: 'pending', taskId: result.taskId, pollKey: keyForAttempt, stage: null });
+        } else {
+          updateVideoRecord(rec.id, { status: 'failed', error: '接口未返回任务信息' });
+        }
+        return;
+      } catch (err) {
+        lastErr = err;
+        if (!RETRYABLE_SUBMIT.test(String((err && err.message) || err))) {
+          updateVideoRecord(rec.id, { status: 'failed', error: (err && err.message) || '视频生成失败' });
+          return;
+        }
+        // 可重试错误（队列已满/限流）：换下一把 Key 并退避后继续
+      }
     }
+    updateVideoRecord(rec.id, {
+      status: 'failed',
+      error: `Agnes 平台队列持续繁忙（已自动重试 ${submitDelays.length - 1} 轮仍未受理）：${(lastErr && lastErr.message) || '未知错误'}；建议避开高峰时段（上午/深夜）再试`,
+    });
   })();
 });
 

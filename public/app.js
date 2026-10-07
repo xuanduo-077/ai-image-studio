@@ -791,8 +791,8 @@ async function handleAcctVidKeySubmit(e) {
 /** 把 Agnes 平台侧报错翻译成用户可行动的提示 */
 function friendlyVideoError(msg) {
   const s = String(msg || '');
-  if (/队列已满/.test(s)) {
-    return 'Agnes 平台视频队列已满（高峰期限流，与你的部署无关）：请 10-30 分钟后重试，或降低压力（480P、更短时长）；若账号浮窗中有多把不同账号的密钥，也可调整顺序换号重试';
+  if (/队列已满|持续繁忙/.test(s)) {
+    return 'Agnes 平台队列持续繁忙（系统已自动换密钥重试多轮仍未受理）：建议避开高峰时段（上午/深夜）再试；这不是你的部署问题';
   }
   if (/余额|额度|insufficient|quota/i.test(s)) {
     return 'Agnes 账户额度不足：请充值，或在账号浮窗中更换其他密钥';
@@ -1226,6 +1226,9 @@ async function generateVideo() {
     };
   }
 
+  // 队列已满时服务端会轮换这些密钥自动重试
+  body.candidateKeys = keysForProvider('agnes').map((k) => k.key);
+
   setVideoGenerating(true);
   hideVideoError();
 
@@ -1345,7 +1348,8 @@ function buildVideoCard(item) {
       item.status === 'submitting'
         ? '正在提交生成任务，请稍候…'
         : `视频生成中（${videoModeLabel(item.mode)} · ${item.seconds} 秒），请稍候…` +
-          (item.taskId ? `（任务 ${String(item.taskId).slice(0, 12)}…）` : '');
+          (item.taskId ? `（任务 ${String(item.taskId).slice(0, 12)}…）` : '') +
+          (item.stage ? ` · ${item.stage}` : '');
     box.appendChild(sp);
     box.appendChild(txt);
     card.appendChild(box);

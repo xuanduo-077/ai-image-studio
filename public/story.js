@@ -1658,6 +1658,7 @@ document.addEventListener('history-updated', (e) => {
     ) {
       shot.status = r.status === 'pending' ? 'video_pending' : r.status === 'done' ? 'video_done' : r.status;
       shot.taskId = r.taskId || null;
+      shot.pollKey = r.pollKey || shot.pollKey;
       shot.videoFile = r.videoFile || null;
       shot.videoUrl = r.videoUrl || null;
       shot.error = r.error || null;
