@@ -96,7 +96,7 @@ let authMode = 'login';
 /* ---------------- 视频生成状态 ---------------- */
 
 const VSECONDS = ['4', '5', '8', '10'].map((v) => ({ label: `${v} 秒`, value: v }));
-const VSIZES = ['480P', '720P', '1080P'].map((v) => ({ label: v, value: v }));
+const VSIZES = ['720P', '1080P'].map((v) => ({ label: v, value: v }));
 const VRATIOS = ['16:9', '9:16', '1:1'].map((v) => ({ label: v, value: v }));
 
 const video = {
@@ -193,7 +193,7 @@ function loadPersisted() {
     if (typeof saved.watermark === 'boolean') state.watermark = saved.watermark;
     if (saved.vmode === 'reference' || saved.vmode === 'keyframe') state.vmode = saved.vmode;
     if (typeof saved.vseconds === 'string' && saved.vseconds) state.vseconds = saved.vseconds;
-    if (typeof saved.vsize === 'string' && saved.vsize) state.vsize = saved.vsize;
+    if (typeof saved.vsize === 'string' && ['720P', '1080P'].includes(saved.vsize)) state.vsize = saved.vsize;
     if (typeof saved.vratio === 'string' && saved.vratio) state.vratio = saved.vratio;
   } catch {
     /* 忽略本地存储解析失败 */
