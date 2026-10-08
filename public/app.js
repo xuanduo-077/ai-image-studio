@@ -1905,6 +1905,24 @@ function buildCard(item) {
   ren.addEventListener('click', () => renameItem(item));
   actions.appendChild(ren);
 
+  const asRef = document.createElement('button');
+  asRef.type = 'button';
+  asRef.className = 'mini-btn';
+  asRef.textContent = '用作参考图';
+  asRef.title = '把这张图放入图生图参考图槽位 1（主图），填提示词后即可生成变体';
+  asRef.addEventListener('click', () => {
+    imgRefs[0] = item.file
+      ? { kind: 'file', value: item.file }
+      : item.url
+        ? { kind: 'url', value: item.url }
+        : { kind: 'b64', value: item.b64 };
+    renderSlots();
+    const field = document.getElementById('img-ref-field');
+    if (field) field.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    showToast('已设为参考图（主图），修改提示词后点「立即生成」即可生成变体');
+  });
+  actions.appendChild(asRef);
+
   const del = document.createElement('button');
   del.type = 'button';
   del.className = 'mini-btn danger';
